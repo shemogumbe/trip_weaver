@@ -66,6 +66,34 @@ def format_plan(plan: BaseModel) -> dict:
         evening = serialize_slot(dd.get("evening") if isinstance(dd, dict) else getattr(day, "evening", None))
 
         itinerary_out.append({"date": date_val, "morning": morning, "afternoon": afternoon, "evening": evening})
+    # If the synthesized itinerary has empty slots for all days, try to build a
+    # simple schedule from the activities_catalog as a fallback so API output
+    # isn't all-empty. This keeps downstream formatting idempotent and avoids
+    # changing upstream agents here.
+    all_empty = all(d["morning"] is None and d["afternoon"] is None and d["evening"] is None for d in itinerary_out)
+    if all_empty:
+        catalog = getattr(plan, "activities_catalog", []) or []
+        # convert catalog items to dicts
+        cat = [_to_dict(c) if not isinstance(c, dict) else c for c in catalog]
+        ci = 0
+        scheduled = []
+        for d in getattr(plan, "itinerary", []) or []:
+            dd = _to_dict(d) or d
+            date_val = dd.get("date") if isinstance(dd, dict) else None
+            morning = None
+            afternoon = None
+            evening = None
+            if ci < len(cat):
+                morning = _prune(cat[ci], ["title", "location", "duration_hours", "est_price", "source_url", "tags"]) if cat[ci] else None
+                ci += 1
+            if ci < len(cat):
+                afternoon = _prune(cat[ci], ["title", "location", "duration_hours", "est_price", "source_url", "tags"]) if cat[ci] else None
+                ci += 1
+            if ci < len(cat):
+                evening = _prune(cat[ci], ["title", "location", "duration_hours", "est_price", "source_url", "tags"]) if cat[ci] else None
+                ci += 1
+            scheduled.append({"date": date_val, "morning": morning, "afternoon": afternoon, "evening": evening})
+        itinerary_out = scheduled
 
     return {"flights": flights_out, "stays": stays_out, "activities": itinerary_out}
 
@@ -73,10 +101,10 @@ def format_plan(plan: BaseModel) -> dict:
 if __name__ == "__main__":
     prefs = TravelerPrefs(
         origin="NBO",
-        destination="Dubai",
+        destination="Lagos",
         start_date=date(2025, 11, 10),
         end_date=date(2025, 11, 16),
-        hobbies=["golf", "fine dining"],
+        hobbies=["night life", "fine dining"],
         trip_type="honeymoon"
     )
     state = RunState(prefs=prefs)

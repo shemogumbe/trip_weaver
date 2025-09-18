@@ -92,6 +92,11 @@ def activities_agent(state: RunState) -> RunState:
     if not refined:
         refined = all_candidates  # fallback already Activity objects
 
+    # store refined activities into the plan's catalog so later steps (itinerary_synthesizer)
+    # can build daily plans from the same source. Without this, the synthesizer will
+    # see an empty catalog and produce empty day slots.
+    state.plan.activities_catalog = refined
+
     # Step 2: schedule into daily buckets
     days = (p.end_date - p.start_date).days + 1
     itinerary = []
