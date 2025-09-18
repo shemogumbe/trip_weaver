@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import List
+from typing import List, Optional
 from app.integrations.openai_client import call_gpt
 from app.models.entities import StayOption
 from app.graph.utils import pick
@@ -87,25 +87,104 @@ Raw input:
     stays = []
     for s in structured["stays"]:
         try:
-            cleaned = pick(s, [
+            # safely extract expected keys from the dict (avoid using pick() which expects text)
+            expected = [
                 "name", "area", "est_price_per_night", "score",
                 "highlights", "booking_links", "source_url", "source_title"
-            ])
+            ]
+            cleaned = {k: s.get(k) for k in expected if k in s}
 
-            # normalize booking_links
-            if isinstance(cleaned.get("booking_links"), dict):
-                cleaned["booking_links"] = [cleaned["booking_links"].get("url")]
-            elif not isinstance(cleaned.get("booking_links"), list):
-                cleaned["booking_links"] = []
+            # helper to coerce to str or None
+            def to_str(val: Optional[object]) -> Optional[str]:
+                if val is None:
+                    return None
+                if isinstance(val, str):
+                    return val
+                if isinstance(val, (int, float, bool)):
+                    return str(val)
+                if isinstance(val, dict):
+                    for k in ("text", "title", "name", "summary", "url"):
+                        v = val.get(k)
+                        if isinstance(v, str):
+                            return v
+                    try:
+                        return json.dumps(val)
+                    except Exception:
+                        return None
+                try:
+                    return str(val)
+                except Exception:
+                    return None
+
+            # sanitize strings
+            for fld in ("name", "area", "source_url", "source_title"):
+                if fld in cleaned:
+                    cleaned[fld] = to_str(cleaned.get(fld))
+
+            # numeric fields
+            if "est_price_per_night" in cleaned:
+                try:
+                    cleaned["est_price_per_night"] = float(cleaned["est_price_per_night"]) if cleaned["est_price_per_night"] is not None else None
+                except Exception:
+                    cleaned["est_price_per_night"] = None
+
+            if "score" in cleaned:
+                try:
+                    cleaned["score"] = float(cleaned["score"]) if cleaned["score"] is not None else None
+                except Exception:
+                    cleaned["score"] = None
+
+            # highlights -> list[str]
+            highlights = cleaned.get("highlights")
+            norm_highlights: List[str] = []
+            if isinstance(highlights, list):
+                for it in highlights:
+                    if isinstance(it, str) and it:
+                        norm_highlights.append(it)
+                    elif isinstance(it, dict):
+                        txt = to_str(it)
+                        if txt:
+                            norm_highlights.append(txt)
+            elif isinstance(highlights, str) and highlights:
+                norm_highlights = [highlights]
+            cleaned["highlights"] = norm_highlights
+
+            # booking_links -> list[str]
+            links = cleaned.get("booking_links")
+            normalized_links: List[str] = []
+            if isinstance(links, str) and links:
+                normalized_links.append(links)
+            elif isinstance(links, dict):
+                url = links.get("url") or links.get("link") or links.get("href") or links.get("value")
+                if isinstance(url, str) and url:
+                    normalized_links.append(url)
+            elif isinstance(links, list):
+                for it in links:
+                    if isinstance(it, str) and it:
+                        normalized_links.append(it)
+                    elif isinstance(it, dict):
+                        url = it.get("url") or it.get("link") or it.get("href") or it.get("value")
+                        if isinstance(url, str) and url:
+                            normalized_links.append(url)
+            cleaned["booking_links"] = normalized_links
 
             # fallbacks
             cleaned.setdefault("source_url", s.get("source_url") or s.get("url", ""))
             cleaned.setdefault("source_title", s.get("source_title") or s.get("title", ""))
 
-            stays.append(StayOption(**cleaned))
+            # restrict keys to stay model
+            allowed = {"name", "area", "est_price_per_night", "score", "highlights", "booking_links", "source_url", "source_title"}
+            cleaned = {k: v for k, v in cleaned.items() if k in allowed}
+
+            # construct model
+            try:
+                stays.append(StayOption(**cleaned))
+            except Exception:
+                logger.exception("Error casting stay option payload=%s", cleaned)
+                continue
 
         except Exception as e:
-            logger.error("Error casting stay option: %s", e)
+            logger.exception("Unexpected error processing stay item: %s", e)
 
     if state:
         state.logs.append({
