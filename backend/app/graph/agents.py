@@ -1,3 +1,6 @@
+from datetime import timedelta
+
+
 from .state import RunState
 from app.models.entities import FlightOption, StayOption, Activity, DayPlan
 from app.graph.utils import pick, normalize_price, ensure_time_feasible, split_days
@@ -8,6 +11,9 @@ from app.graph.postprocess.refine_flights_with_llm import refine_flights_with_ll
 from app.graph.postprocess.refine import refine_with_gpt
 import logging
 from app.integrations.tavily_client import t_search, t_extract, t_map
+from app.graph.postprocess.refine_stays_with_llm import refine_stays_with_llm
+from app.graph.postprocess.refine_activities_with_llm import refine_activities_with_llm
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -27,11 +33,11 @@ def flight_agent(state: RunState) -> RunState:
     q = f"{p.origin} to {p.destination} direct flight schedule {p.start_date}"
     raw = t_search(q, max_results=8)
 
-    print(f"flight raw data %s {raw}")
 
     raw_results = raw.get("results", [])
 
     refined = refine_flights_with_llm(raw_results, state=state)
+    print(f"Refined flights: {refined}")
 
     if not refined:
         candidates = process_flights(raw_results, state.prefs)  # your existing parser
@@ -44,44 +50,86 @@ def flight_agent(state: RunState) -> RunState:
 
 def stay_agent(state: RunState) -> RunState:
     p = state.prefs
-    q = f"hotels in {p.destination} under $250/night {p.start_date}"
-    raw = t_search(q, max_results=8)
-    # print(f"stay raw data {raw}")
-    candidates = process_stays(raw.get("results", []), p)
-    state.plan.stays = refine_with_gpt([c.dict() for c in candidates], "Stays")
+    q = f"hotels in {p.destination} {p.start_date}"
+    raw = t_search(q, max_results=6)
+
+    raw_results = raw.get("results", [])
+
+    refined = refine_stays_with_llm(raw_results, state=state)
+    print(f"Refined stays: {refined}")
+
+    if not refined:
+        candidates = process_stays(raw_results, p)  # your existing parser
+        state.plan.stays = candidates
+    else:
+        state.plan.stays = refined
+
     return state
+
 
 
 def activities_agent(state: RunState) -> RunState:
     p = state.prefs
     all_candidates = []
 
+    # Collect and process per hobby
     for hobby in p.hobbies:
         q = f"{hobby} in {p.destination} price schedule {p.start_date}"
         raw = t_search(q, max_results=6)
-        # print(f"activities raw data {raw}")
-        candidates = process_activities(raw.get("results", []), p, q)
+        raw_results = raw.get("results", [])
+        
+        # Fallback parser needs query
+        if not raw_results:
+            continue
+
+        candidates = process_activities(raw_results, p, q)
         all_candidates.extend(candidates)
 
-    state.plan.activities_catalog = refine_with_gpt(
-        [c.dict() for c in all_candidates], "Activities"
-    )
+    # Step 1: refine into Activity objects
+    refined = refine_activities_with_llm([c.dict() for c in all_candidates], state=state)
+    print(f"Refined activities: {refined}")
+
+    if not refined:
+        refined = all_candidates  # fallback already Activity objects
+
+    # Step 2: schedule into daily buckets
+    days = (p.end_date - p.start_date).days + 1
+    itinerary = []
+    i = 0
+
+    for d in range(days):
+        date = (p.start_date + timedelta(days=d)).isoformat()
+        day_plan = {"date": date, "morning": None, "afternoon": None, "evening": None}
+
+        if i < len(refined): 
+            day_plan["morning"] = refined[i]; i += 1
+        if i < len(refined): 
+            day_plan["afternoon"] = refined[i]; i += 1
+        if i < len(refined): 
+            day_plan["evening"] = refined[i]; i += 1
+
+        itinerary.append(day_plan)
+
+    # Step 3: save
+    state.plan.itinerary = itinerary
     return state
 
+
 def budget_agent(state: RunState) -> RunState:
-    nights = (state.prefs.end_date - state.prefs.start_date).days
-    stay_low = min([s.est_price_per_night for s in state.plan.stays if s.est_price_per_night] or [60])
-    flights_mid = sorted([f.est_price for f in state.plan.flights if f.est_price] or [500])[0]
-    activities_mid = sum([a.est_price or 30 for a in state.plan.activities_catalog[:6]]) / max(1, len(state.plan.activities_catalog[:6]))
-    total_est = flights_mid + nights * (stay_low + activities_mid)
-    state.plan.budget_summary = {
-        "nights": nights,
-        "flight_est": flights_mid,
-        "stay_per_night_est": stay_low,
-        "activity_avg_est": activities_mid,
-        "trip_total_est": round(total_est, 2)
-    }
+    activities = state.plan.activities_catalog[:6]
+
+    prices = []
+    for a in activities:
+        if isinstance(a, dict):
+            prices.append(a.get("est_price") or 30)
+        else:
+            prices.append(a.est_price or 30)
+
+    activities_mid = sum(prices) / max(1, len(prices))
+    state.plan.activities_budget = activities_mid
+
     return state
+
 
 def itinerary_synthesizer(state: RunState) -> RunState:
     days = split_days(state.prefs.start_date, state.prefs.end_date)

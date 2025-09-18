@@ -21,7 +21,7 @@ class StayOption(BaseModel):
     est_price_per_night: Optional[float] = None
     score: Optional[float] = None
     highlights: List[str] = []
-    booking_links: List[str] = []
+    booking_links: List[str] =[]
 
 
 class Activity(BaseModel):

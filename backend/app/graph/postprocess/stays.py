@@ -1,7 +1,7 @@
 from app.graph.utils import normalize_price, extract_rating, strip_listicle
 from app.models.entities import StayOption
 
-def process_stays(results, prefs):
+def process_stays(results, prefs, query=None):
     options = []
     for r in results:
         title = r.get("title", "").strip()
@@ -24,6 +24,8 @@ def process_stays(results, prefs):
             score=score,
             highlights=[],
             booking_links=[url],
+            source_url=url,
+            source_title=title,
         ))
 
     return options

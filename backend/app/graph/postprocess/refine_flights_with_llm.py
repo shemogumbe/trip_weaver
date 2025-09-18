@@ -4,14 +4,22 @@ from typing import List
 from app.integrations.openai_client import call_gpt
 from app.models.entities import FlightOption
 from app.graph.utils import pick
+import json
+import logging
+from typing import List, Optional
+from app.integrations.openai_client import call_gpt
+from app.models.entities import FlightOption
+from app.graph.utils import pick
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
-def refine_flights_with_llm(raw_results: List[dict], state=None, model="gpt-4o-mini") -> List[FlightOption]:
+def refine_flights_with_llm(raw_results: List[dict], state=None, model: str = "gpt-4o-mini") -> List[FlightOption]:
     """
     Takes Tavily raw results and asks GPT to return structured flight options.
+    This function defensively sanitizes GPT output so Pydantic validation can't
+    raise unexpected type errors (e.g. trying to call .lower() on a dict).
     """
 
     if not raw_results:
@@ -68,9 +76,10 @@ Raw input:
         structured = call_gpt(prompt, model=model, response_format={"type": "json_object"})
     except TypeError:
         structured = call_gpt(prompt, model=model)
-    print(f"structured: {structured}")
-    print(f"type: {type(structured)}")
 
+    logger.debug("raw structured result: %s", structured)
+
+    # If GPT returns a string, parse JSON
     if isinstance(structured, str):
         try:
             structured = json.loads(structured)
@@ -78,44 +87,116 @@ Raw input:
             logger.error("Invalid JSON string from GPT: %s", e)
             return []
 
-    
     # Expect "flights"
-    if "flights" not in structured:
-        logger.warning("GPT did not return 'flights' key")
+    if not isinstance(structured, dict) or "flights" not in structured or not isinstance(structured["flights"], list):
+        logger.warning("GPT did not return 'flights' key or returned invalid shape")
         if state:
-            state.logs.append({"stage": "Flights", "raw_count": len(raw_results), "refined_count": 0, "error": "missing flights key"})
+            state.logs.append({"stage": "Flights", "raw_count": len(raw_results), "refined_count": 0, "error": "missing or invalid flights key"})
         return []
 
-    flights = []
-    for f in structured["flights"]:
+    def to_str(val: Optional[object]) -> Optional[str]:
+        if val is None:
+            return None
+        if isinstance(val, str):
+            return val
+        if isinstance(val, (int, float, bool)):
+            return str(val)
+        if isinstance(val, dict):
+            # prefer common textual keys
+            for k in ("text", "title", "name", "summary", "url"):
+                v = val.get(k)
+                if isinstance(v, str):
+                    return v
+            # fallback to json string so pydantic receives a string
+            try:
+                return json.dumps(val)
+            except Exception:
+                return None
+        # fallback
         try:
-            cleaned = pick(f, [
-                "summary", "depart_time", "arrive_time", "airline",
-                "flight_number", "stops", "est_price",
-                "booking_links", "source_url", "source_title"
-            ])
+            return str(val)
+        except Exception:
+            return None
 
-            # normalize booking_links
-            if isinstance(cleaned.get("booking_links"), dict):
-                cleaned["booking_links"] = [cleaned["booking_links"].get("url")]
-            elif not isinstance(cleaned.get("booking_links"), list):
-                cleaned["booking_links"] = []
+    def sanitize_flight_dict(raw: dict) -> dict:
+        # pick only expected keys
+        # raw is expected to be a dict; safely extract expected keys instead of
+        # calling `pick()` which expects a text string. This avoids AttributeError
+        # when GPT returns nested dicts.
+        expected_keys = [
+            "summary", "depart_time", "arrive_time", "airline",
+            "flight_number", "stops", "est_price",
+            "booking_links", "source_url", "source_title"
+        ]
+        cleaned = {k: raw.get(k) for k in expected_keys if k in raw}
 
-            # fallback for required fields
-            cleaned.setdefault("flight_number", "UNKNOWN")
-            cleaned.setdefault("source_url", f.get("source_url") or f.get("url", ""))
-            cleaned.setdefault("source_title", f.get("source_title") or f.get("title", ""))
+        # ensure string fields are strings
+        for s in ("summary", "depart_time", "arrive_time", "airline", "flight_number", "source_url", "source_title"):
+            if s in cleaned:
+                cleaned[s] = to_str(cleaned.get(s))
 
-            flights.append(FlightOption(**cleaned))
+        # numeric coercion with safe fallbacks
+        if "stops" in cleaned:
+            try:
+                cleaned["stops"] = int(cleaned["stops"]) if cleaned["stops"] is not None else None
+            except Exception:
+                cleaned["stops"] = None
 
-        except Exception as e:
-            logger.error("Error casting flight option: %s", e)
+        if "est_price" in cleaned:
+            try:
+                cleaned["est_price"] = float(cleaned["est_price"]) if cleaned["est_price"] is not None else None
+            except Exception:
+                cleaned["est_price"] = None
+
+        # booking_links -> list[str]
+        links = cleaned.get("booking_links")
+        normalized: List[str] = []
+        if isinstance(links, str):
+            if links:
+                normalized.append(links)
+        elif isinstance(links, dict):
+            # try common url keys
+            url = links.get("url") or links.get("link") or links.get("href") or links.get("value")
+            if isinstance(url, str) and url:
+                normalized.append(url)
+        elif isinstance(links, list):
+            for it in links:
+                if isinstance(it, str) and it:
+                    normalized.append(it)
+                elif isinstance(it, dict):
+                    url = it.get("url") or it.get("link") or it.get("href") or it.get("value")
+                    if isinstance(url, str) and url:
+                        normalized.append(url)
+                # ignore other types
+        cleaned["booking_links"] = normalized
+
+        # restrict to allowed keys only (avoid accidental nested dicts)
+        allowed = {"summary", "depart_time", "arrive_time", "airline", "flight_number", "stops", "est_price", "booking_links", "source_url", "source_title"}
+        return {k: v for k, v in cleaned.items() if k in allowed}
+
+    flights: List[FlightOption] = []
+    for idx, raw in enumerate(structured["flights"]):
+        logger.info("processing flight index=%d", idx)
+        logger.debug("raw flight: %s", raw)
+        try:
+            cleaned = sanitize_flight_dict(raw)
+        except Exception:
+            # already logged
+            continue
+
+        logger.debug("sanitized payload before model: %s", cleaned)
+        try:
+            fo = FlightOption(**cleaned)
+            flights.append(fo)
+        except Exception:
+            logger.exception("FlightOption validation failed for payload: %s", cleaned)
+            # continue with next item
+            continue
+
     if state:
-        state.logs.append({
-            "stage": "Flights",
-            "raw_count": len(raw_results),
-            "refined_count": len(flights)
-        })
+        state.logs.append({"stage": "Flights", "raw_count": len(raw_results), "refined_count": len(flights)})
 
     logger.info("Refined %d flight options", len(flights))
+    logger.info("Refined flight options: %s", flights)
+
     return flights
