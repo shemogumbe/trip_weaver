@@ -1,3 +1,6 @@
+
+import json
+
 from datetime import date
 from app.models.trip_preferences import TravelerPrefs
 from app.graph.state import RunState
@@ -15,5 +18,12 @@ if __name__ == "__main__":
     state = RunState(prefs=prefs)
     graph = build_graph()
     result = graph.invoke(state)
+
+    # format response in json for returning via API
+    response = {
+        "plan": result["plan"],
+        "logs": result.get("logs", [])
+    }
     plan = result['plan']
-    print(plan)
+    print(json.dumps(response, indent=2, default=str))
+

@@ -5,13 +5,15 @@ from typing import List, Optional
 
 class FlightOption(BaseModel):
     summary: str
-    depart_time: str
-    arrive_time: str
-    airline: str
-    stops: int
+    depart_time: Optional[str] = None
+    arrive_time: Optional[str] = None
+    airline: Optional[str] = None
+    flight_number: Optional[str] = None
+    stops: Optional[int] = None
     est_price: Optional[float] = None
-    booking_links: List[str] = []
-
+    booking_links: Optional[List[str]] = []
+    source_url: Optional[str] = None
+    source_title: Optional[str] = None
 
 class StayOption(BaseModel):
     name: str

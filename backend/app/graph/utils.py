@@ -56,3 +56,18 @@ def split_days(start: date, end: date) -> List[str]:
         days.append(current.isoformat())
         current += timedelta(days=1)
     return days
+
+def extract_times(text: str):
+    """Find two times in HH:MM (with optional AM/PM)."""
+    times = re.findall(r"\b([0-2]?\d:[0-5]\d(?:\s?(?:am|pm))?)\b", text)
+    depart, arrive = (times + ["TBD", "TBD"])[:2]
+    return depart, arrive
+
+def extract_rating(text: str):
+    """Extract hotel rating like 4.5/5."""
+    match = re.search(r"(\d\.\d)\s*/\s*5", text)
+    return float(match.group(1)) if match else None
+
+def strip_listicle(title: str) -> bool:
+    """Return True if it's a spammy listicle result."""
+    return any(x in title.lower() for x in ["best", "top", "list", "10 ", "20 "])

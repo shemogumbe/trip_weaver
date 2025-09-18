@@ -1,3 +1,4 @@
+from dataclasses import Field
 from pydantic import BaseModel
 from typing import List, Dict, Any
 from app.models.entities import FlightOption, StayOption, Activity, DayPlan
@@ -17,3 +18,4 @@ class RunState(BaseModel):
     plan: TripPlan = TripPlan()
     artifacts: Dict[str, Any] = {}
     done: bool = False
+    logs: List[dict] = []
