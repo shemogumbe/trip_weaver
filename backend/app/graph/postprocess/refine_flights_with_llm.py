@@ -9,7 +9,7 @@ import logging
 from typing import List, Optional
 from app.integrations.openai_client import call_gpt
 from app.models.entities import FlightOption
-from app.graph.utils import pick
+from app.graph.utils import pick, extract_currency, validate_price_reasonableness
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -49,8 +49,7 @@ def refine_flights_with_llm(raw_results: List[dict], state=None, model: str = "g
 
     prompt = f"""
 You are a flight data extractor.
-Convert noisy search results about flights from Nairobi (NBO) to Dubai (DXB)
-into structured JSON flight options.
+Convert noisy search results about flights into structured JSON flight options.
 
 Rules:
 - Return JSON only.
@@ -59,7 +58,9 @@ Rules:
 - Times: convert to 24h "HH:MM".
 - Airline names must be full (e.g. "Kenya Airways").
 - Extract flight number if available (e.g. KQ310).
-- If price is missing, set "est_price" = null.
+- PRICE EXTRACTION: Look for actual flight prices, NOT years (2025), discounts (20% off), or other numbers.
+- Only extract prices that are clearly flight ticket costs (typically $100-$3000 range).
+- If price is unclear or seems like a year/discount, set "est_price" = null.
 - Use result.url as fallback booking link.
 - Always include source_url and source_title.
 - Never include explanations.
@@ -144,8 +145,25 @@ Raw input:
 
         if "est_price" in cleaned:
             try:
-                cleaned["est_price"] = float(cleaned["est_price"]) if cleaned["est_price"] is not None else None
-            except Exception:
+                price = float(cleaned["est_price"]) if cleaned["est_price"] is not None else None
+                if price is not None:
+                    # Extract currency from the raw data
+                    raw_text = str(raw.get("content", "")) + " " + str(raw.get("title", ""))
+                    currency = extract_currency(raw_text)
+                    
+                    # Validate price reasonableness for flight context
+                    if validate_price_reasonableness(price, raw_text, currency):
+                        cleaned["est_price"] = price
+                        cleaned["currency"] = currency
+                        logger.info(f"Validated flight price: {price} {currency}")
+                    else:
+                        logger.warning(f"Rejected unreasonable flight price: {price} {currency}")
+                        cleaned["est_price"] = None
+                        cleaned["currency"] = currency
+                else:
+                    cleaned["est_price"] = None
+            except Exception as e:
+                logger.warning(f"Error validating flight price: {e}")
                 cleaned["est_price"] = None
 
         # booking_links -> list[str]
@@ -171,7 +189,7 @@ Raw input:
         cleaned["booking_links"] = normalized
 
         # restrict to allowed keys only (avoid accidental nested dicts)
-        allowed = {"summary", "depart_time", "arrive_time", "airline", "flight_number", "stops", "est_price", "booking_links", "source_url", "source_title"}
+        allowed = {"summary", "depart_time", "arrive_time", "airline", "flight_number", "stops", "est_price", "currency", "booking_links", "source_url", "source_title"}
         return {k: v for k, v in cleaned.items() if k in allowed}
 
     flights: List[FlightOption] = []
