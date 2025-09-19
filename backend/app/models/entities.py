@@ -21,15 +21,18 @@ class StayOption(BaseModel):
     est_price_per_night: Optional[float] = None
     score: Optional[float] = None
     highlights: List[str] = []
-    booking_links: List[str] =[]
+    booking_links: List[str] = []
+    source_url: Optional[str] = None
+    source_title: Optional[str] = None
 
 
 class Activity(BaseModel):
     title: str
     location: str
-    duration_hours: float
+    duration_hours: Optional[float] = None
     est_price: Optional[float] = None
     source_url: Optional[str] = None
+    source_title: Optional[str] = None
     tags: List[str] = []
 
 
