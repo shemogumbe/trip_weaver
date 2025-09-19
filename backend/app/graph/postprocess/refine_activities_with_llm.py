@@ -3,7 +3,7 @@ import logging
 from typing import List, Optional
 from app.integrations.openai_client import call_gpt
 from app.models.entities import Activity
-from app.graph.utils import pick
+from app.graph.utils import pick, extract_currency, validate_price_reasonableness
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -125,8 +125,25 @@ Raw input:
 
             if "est_price" in cleaned:
                 try:
-                    cleaned["est_price"] = float(cleaned["est_price"]) if cleaned["est_price"] is not None else None
-                except Exception:
+                    price = float(cleaned["est_price"]) if cleaned["est_price"] is not None else None
+                    if price is not None:
+                        # Extract currency from the raw data
+                        raw_text = str(a.get("content", "")) + " " + str(a.get("title", ""))
+                        currency = extract_currency(raw_text)
+                        
+                        # Validate price reasonableness for activity context
+                        if validate_price_reasonableness(price, raw_text, currency):
+                            cleaned["est_price"] = price
+                            cleaned["currency"] = currency
+                            logger.info(f"Validated activity price: {price} {currency}")
+                        else:
+                            logger.warning(f"Rejected unreasonable activity price: {price} {currency}")
+                            cleaned["est_price"] = None
+                            cleaned["currency"] = currency
+                    else:
+                        cleaned["est_price"] = None
+                except Exception as e:
+                    logger.warning(f"Error validating activity price: {e}")
                     cleaned["est_price"] = None
 
             # tags -> list[str]
@@ -149,7 +166,7 @@ Raw input:
             cleaned.setdefault("source_title", a.get("source_title") or a.get("title", ""))
 
             # restrict to allowed keys
-            allowed = {"title", "location", "duration_hours", "est_price", "source_url", "source_title", "tags"}
+            allowed = {"title", "location", "duration_hours", "est_price", "currency", "source_url", "source_title", "tags"}
             cleaned = {k: v for k, v in cleaned.items() if k in allowed}
 
             try:

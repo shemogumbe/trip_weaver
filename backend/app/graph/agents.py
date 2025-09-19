@@ -52,7 +52,10 @@ def destination_research(state: RunState) -> RunState:
     tourism_urls = []
     for result in all_search_results + all_map_results:
         url = result.get("url", "")
-        if any(site in url.lower() for site in ["tripadvisor.com", "lonelyplanet.com", "wikitravel.org", "visit", "tourism"]):
+        # Ensure url is a string, not a dict
+        if isinstance(url, dict):
+            url = url.get("url", "") or url.get("href", "") or str(url)
+        if url and isinstance(url, str) and any(site in url.lower() for site in ["tripadvisor.com", "lonelyplanet.com", "wikitravel.org", "visit", "tourism"]):
             tourism_urls.append(url)
     
     crawl_results = []
@@ -72,7 +75,10 @@ def destination_research(state: RunState) -> RunState:
     all_sources = all_search_results + all_map_results + crawl_results
     for item in all_sources:
         url = item.get("url", "")
-        if url:
+        # Ensure url is a string, not a dict
+        if isinstance(url, dict):
+            url = url.get("url", "") or url.get("href", "") or str(url)
+        if url and isinstance(url, str):
             state.plan.sources[url] = {
                 "title": item.get("title", ""),
                 "snippet": item.get("content", "")[:200] + "..." if len(item.get("content", "")) > 200 else item.get("content", "")
@@ -102,7 +108,10 @@ def flight_agent(state: RunState) -> RunState:
     airline_urls = []
     for result in all_results:
         url = result.get("url", "")
-        if any(airline in url.lower() for airline in ["kenya-airways.com", "emirates.com", "qatarairways.com"]):
+        # Ensure url is a string, not a dict
+        if isinstance(url, dict):
+            url = url.get("url", "") or url.get("href", "") or str(url)
+        if url and isinstance(url, str) and any(airline in url.lower() for airline in ["kenya-airways.com", "emirates.com", "qatarairways.com"]):
             airline_urls.append(url)
     
     if airline_urls:
@@ -115,7 +124,10 @@ def flight_agent(state: RunState) -> RunState:
     unique_results = []
     for result in all_results:
         url = result.get("url", "")
-        if url and url not in seen_urls:
+        # Ensure url is a string, not a dict
+        if isinstance(url, dict):
+            url = url.get("url", "") or url.get("href", "") or str(url)
+        if url and isinstance(url, str) and url not in seen_urls:
             seen_urls.add(url)
             unique_results.append(result)
     
@@ -160,7 +172,10 @@ def stay_agent(state: RunState) -> RunState:
     booking_urls = []
     for result in all_results:
         url = result.get("url", "")
-        if any(site in url.lower() for site in ["booking.com", "expedia.com", "hotels.com"]):
+        # Ensure url is a string, not a dict
+        if isinstance(url, dict):
+            url = url.get("url", "") or url.get("href", "") or str(url)
+        if url and isinstance(url, str) and any(site in url.lower() for site in ["booking.com", "expedia.com", "hotels.com"]):
             booking_urls.append(url)
     
     if booking_urls:
@@ -173,7 +188,10 @@ def stay_agent(state: RunState) -> RunState:
     unique_results = []
     for result in all_results:
         url = result.get("url", "")
-        if url and url not in seen_urls:
+        # Ensure url is a string, not a dict
+        if isinstance(url, dict):
+            url = url.get("url", "") or url.get("href", "") or str(url)
+        if url and isinstance(url, str) and url not in seen_urls:
             seen_urls.add(url)
             unique_results.append(result)
     
@@ -232,7 +250,10 @@ def activities_agent(state: RunState) -> RunState:
     activity_urls = []
     for result in all_results:
         url = result.get("url", "")
-        if any(site in url.lower() for site in ["getyourguide.com", "viator.com", "tripadvisor.com", "airbnb.com/experiences"]):
+        # Ensure url is a string, not a dict
+        if isinstance(url, dict):
+            url = url.get("url", "") or url.get("href", "") or str(url)
+        if url and isinstance(url, str) and any(site in url.lower() for site in ["getyourguide.com", "viator.com", "tripadvisor.com", "airbnb.com/experiences"]):
             activity_urls.append(url)
     
     if activity_urls:
@@ -245,7 +266,10 @@ def activities_agent(state: RunState) -> RunState:
     unique_results = []
     for result in all_results:
         url = result.get("url", "")
-        if url and url not in seen_urls:
+        # Ensure url is a string, not a dict
+        if isinstance(url, dict):
+            url = url.get("url", "") or url.get("href", "") or str(url)
+        if url and isinstance(url, str) and url not in seen_urls:
             seen_urls.add(url)
             unique_results.append(result)
     

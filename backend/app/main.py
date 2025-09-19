@@ -101,10 +101,10 @@ def format_plan(plan: BaseModel) -> dict:
 if __name__ == "__main__":
     prefs = TravelerPrefs(
         origin="NBO",
-        destination="Lagos",
+        destination="Dubai",
         start_date=date(2025, 11, 10),
         end_date=date(2025, 11, 16),
-        hobbies=["night life", "fine dining"],
+        hobbies=["night life", "fine dining", "golf"],
         trip_type="honeymoon"
     )
     state = RunState(prefs=prefs)

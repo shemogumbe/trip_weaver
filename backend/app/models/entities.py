@@ -11,6 +11,7 @@ class FlightOption(BaseModel):
     flight_number: Optional[str] = None
     stops: Optional[int] = None
     est_price: Optional[float] = None
+    currency: Optional[str] = "USD"  # Default to USD if not specified
     booking_links: Optional[List[str]] = []
     source_url: Optional[str] = None
     source_title: Optional[str] = None
@@ -19,6 +20,7 @@ class StayOption(BaseModel):
     name: str
     area: str
     est_price_per_night: Optional[float] = None
+    currency: Optional[str] = "USD"  # Default to USD if not specified
     score: Optional[float] = None
     highlights: List[str] = []
     booking_links: List[str] = []
@@ -31,6 +33,7 @@ class Activity(BaseModel):
     location: str
     duration_hours: Optional[float] = None
     est_price: Optional[float] = None
+    currency: Optional[str] = "USD"  # Default to USD if not specified
     source_url: Optional[str] = None
     source_title: Optional[str] = None
     tags: List[str] = []
