@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from datetime import date
-from app.models.prefs import TravelerPrefs
+from app.models.trip_preferences import TravelerPrefs
 from app.graph.state import RunState
 from app.graph.build_graph import build_graph
 
