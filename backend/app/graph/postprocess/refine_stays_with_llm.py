@@ -3,7 +3,7 @@ import logging
 from typing import List, Optional
 from app.integrations.openai_client import call_gpt
 from app.models.entities import StayOption
-from app.graph.utils import pick
+from app.graph.utils import pick, extract_currency, validate_price_reasonableness
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -121,11 +121,28 @@ Raw input:
                 if fld in cleaned:
                     cleaned[fld] = to_str(cleaned.get(fld))
 
-            # numeric fields
+            # numeric fields with validation
             if "est_price_per_night" in cleaned:
                 try:
-                    cleaned["est_price_per_night"] = float(cleaned["est_price_per_night"]) if cleaned["est_price_per_night"] is not None else None
-                except Exception:
+                    price = float(cleaned["est_price_per_night"]) if cleaned["est_price_per_night"] is not None else None
+                    if price is not None:
+                        # Extract currency from the raw data
+                        raw_text = str(s.get("content", "")) + " " + str(s.get("title", ""))
+                        currency = extract_currency(raw_text)
+                        
+                        # Validate price reasonableness for hotel context
+                        if validate_price_reasonableness(price, raw_text, currency):
+                            cleaned["est_price_per_night"] = price
+                            cleaned["currency"] = currency
+                            logger.info(f"Validated hotel price: {price} {currency}")
+                        else:
+                            logger.warning(f"Rejected unreasonable hotel price: {price} {currency}")
+                            cleaned["est_price_per_night"] = None
+                            cleaned["currency"] = currency
+                    else:
+                        cleaned["est_price_per_night"] = None
+                except Exception as e:
+                    logger.warning(f"Error validating hotel price: {e}")
                     cleaned["est_price_per_night"] = None
 
             if "score" in cleaned:
@@ -173,7 +190,7 @@ Raw input:
             cleaned.setdefault("source_title", s.get("source_title") or s.get("title", ""))
 
             # restrict keys to stay model
-            allowed = {"name", "area", "est_price_per_night", "score", "highlights", "booking_links", "source_url", "source_title"}
+            allowed = {"name", "area", "est_price_per_night", "currency", "score", "highlights", "booking_links", "source_url", "source_title"}
             cleaned = {k: v for k, v in cleaned.items() if k in allowed}
 
             # construct model
