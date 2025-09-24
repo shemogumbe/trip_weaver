@@ -15,6 +15,9 @@ Create a `.env` file in the backend directory:
 ```bash
 TAVILY_API_KEY=your_tavily_api_key_here
 OPENAI_API_KEY=your_openai_api_key_here
+# Runtime toggles (optional)
+# SPEED_MODE=1  # default: 1 (minimize Tavily calls); set 0 for richer results
+# AGENT_TIMEOUT_SECONDS=20  # default: 20 (40 when SPEED_MODE=0)
 ```
 
 ### 3. Start the Server
@@ -120,6 +123,15 @@ Day 7: Departure - NO ACTIVITIES
 - Map API for top attractions
 
 ### Price Accuracy
+## Runtime Settings
+
+- SPEED_MODE
+  - 1 (default): Minimizes Tavily usage for faster, cheaper runs. Still performs one Tavily search for activities context and basic searches for flights/stays.
+  - 0: Uses enhanced Tavily flows (search+extract, optional map/crawl) and optional LLM refinements for richer results.
+
+- AGENT_TIMEOUT_SECONDS
+  - Per-agent timeout for the parallel phase. Defaults to 20 seconds when SPEED_MODE=1, and 40 seconds when SPEED_MODE=0.
+
 - Enhanced price parsing (avoids years/discounts)
 - Context-aware validation
 - Multi-currency support (USD, EUR, KES, GBP)

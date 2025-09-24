@@ -1,10 +1,13 @@
 
+import asyncio
+import time
 import json
 from datetime import date
 from pydantic import BaseModel
 from app.models.trip_preferences import TravelerPrefs
 from app.graph.state import RunState
-from app.graph.build_graph import build_graph
+from app.graph.async_processor import build_graph, process_trip_async_direct
+import logging
 
 
 def _to_dict(obj):
@@ -99,6 +102,15 @@ def format_plan(plan: BaseModel) -> dict:
 
 
 if __name__ == "__main__":
+    import time
+    import logging
+    
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+    
+    overall_start = time.time()
+    logger.info("🚀 Starting PARALLEL trip processing pipeline...")
+    
     prefs = TravelerPrefs(
         origin="NBO",
         destination="Lagos",
@@ -110,6 +122,9 @@ if __name__ == "__main__":
     state = RunState(prefs=prefs)
     graph = build_graph()
     result = graph.invoke(state)
+
+    overall_elapsed = time.time() - overall_start
+    logger.info(f"🎉 TOTAL PIPELINE COMPLETED in {overall_elapsed:.2f}s (was 3-5 minutes sequentially)")
 
     plan = result["plan"]
     formatted = format_plan(plan)

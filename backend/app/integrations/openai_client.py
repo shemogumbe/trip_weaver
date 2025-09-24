@@ -1,14 +1,11 @@
 import os
-
 from openai import OpenAI
-    
 from dotenv import load_dotenv
 
 load_dotenv()
-# Load variables from .env into environment
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-print(f"Key {os.getenv("OPENAI_API_KEY")}")
+# Initialize client; avoid printing secrets
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def call_gpt(prompt: str, model="gpt-4o-mini"):
     resp = client.chat.completions.create(
