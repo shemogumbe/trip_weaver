@@ -3,7 +3,7 @@ import logging
 from typing import List, Optional
 from app.integrations.openai_client import call_gpt
 from app.models.entities import StayOption
-from app.graph.utils import pick, extract_currency, validate_price_reasonableness
+from app.graph.utils.general_utils import pick, extract_currency, validate_price_reasonableness, to_str
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -93,28 +93,6 @@ Raw input:
                 "highlights", "booking_links", "source_url", "source_title"
             ]
             cleaned = {k: s.get(k) for k in expected if k in s}
-
-            # helper to coerce to str or None
-            def to_str(val: Optional[object]) -> Optional[str]:
-                if val is None:
-                    return None
-                if isinstance(val, str):
-                    return val
-                if isinstance(val, (int, float, bool)):
-                    return str(val)
-                if isinstance(val, dict):
-                    for k in ("text", "title", "name", "summary", "url"):
-                        v = val.get(k)
-                        if isinstance(v, str):
-                            return v
-                    try:
-                        return json.dumps(val)
-                    except Exception:
-                        return None
-                try:
-                    return str(val)
-                except Exception:
-                    return None
 
             # sanitize strings
             for fld in ("name", "area", "source_url", "source_title"):

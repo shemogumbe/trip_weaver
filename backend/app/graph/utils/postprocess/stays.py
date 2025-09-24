@@ -1,4 +1,4 @@
-from app.graph.utils import normalize_price, extract_rating, strip_listicle
+from app.graph.utils.general_utils import normalize_price, extract_rating, strip_listicle
 from app.models.entities import StayOption
 
 def process_stays(results, prefs, query=None):

@@ -4,16 +4,15 @@ from typing import List
 
 from .state import RunState
 from app.models.entities import FlightOption, StayOption, Activity, DayPlan
-from app.graph.utils import pick, normalize_price, ensure_time_feasible, split_days
-from app.graph.postprocess.flights import process_flights
-from app.graph.postprocess.stays import process_stays
-from app.graph.postprocess.activities import process_activities
-from app.graph.postprocess.refine_flights_with_llm import refine_flights_with_llm
-from app.graph.postprocess.refine import refine_with_gpt
+from app.graph.utils.general_utils import pick, normalize_price, ensure_time_feasible, split_days
+from app.graph.utils.postprocess.flights import process_flights
+from app.graph.utils.postprocess.stays import process_stays
+from app.graph.utils.postprocess.activities import process_activities
+from app.graph.utils.postprocess.refine_flights_with_llm import refine_flights_with_llm
 import logging
 from app.integrations.tavily_client import t_search, t_extract, t_map, enhance_search_with_extraction, t_crawl
-from app.graph.postprocess.refine_stays_with_llm import refine_stays_with_llm
-from app.graph.postprocess.refine_activities_with_llm import refine_activities_with_llm
+from app.graph.utils.postprocess.refine_stays_with_llm import refine_stays_with_llm
+from app.graph.utils.postprocess.refine_activities_with_llm import refine_activities_with_llm
 
 
 logging.basicConfig(level=logging.INFO)

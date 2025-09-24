@@ -221,3 +221,33 @@ def extract_rating(text: str):
 def strip_listicle(title: str) -> bool:
     """Return True if it's a spammy listicle result."""
     return any(x in title.lower() for x in ["best", "top", "list", "10 ", "20 "])
+
+
+def to_str(val: Optional[object]) -> Optional[str]:
+    """
+    Safely convert any value to a string, handling common data types.
+    Used for sanitizing GPT output in refine functions.
+    """
+    import json
+    if val is None:
+        return None
+    if isinstance(val, str):
+        return val
+    if isinstance(val, (int, float, bool)):
+        return str(val)
+    if isinstance(val, dict):
+        # prefer common textual keys
+        for k in ("text", "title", "name", "summary", "url"):
+            v = val.get(k)
+            if isinstance(v, str):
+                return v
+        # fallback to json string so pydantic receives a string
+        try:
+            return json.dumps(val)
+        except Exception:
+            return None
+    # fallback
+    try:
+        return str(val)
+    except Exception:
+        return None
