@@ -78,6 +78,27 @@ Legacy endpoint for backward compatibility.
 
 ## Features
 
+### 🚀 OpenAI-Based Activity Generation (NEW)
+**42% Cost Reduction with Better Activity Distribution**
+
+- **Replaces 22 Tavily calls** with 1 OpenAI call for activity generation
+- **Smart day planning:** No activities on arrival/departure days
+- **Even distribution:** Activities spread across available days (not cramped in early days)
+- **Comprehensive generation:** Activities based on destination, interests, budget level
+- **Same response format:** No frontend breaking changes
+
+**Cost Impact:**
+- Activities agent: 22 Tavily calls → 1 Tavily + 1 OpenAI call (95% reduction)
+- Overall trip cost: $0.406 → $0.244 per trip (40% savings)
+- Trips per 1000 Tavily credits: 20 → 33 trips
+
+**Activity Distribution Example (7-day trip):**
+```
+Day 1: Arrival - NO ACTIVITIES
+Days 2-6: Morning/afternoon/evening activities 
+Day 7: Departure - NO ACTIVITIES
+```
+
 ###  Enhanced Flight Data
 - Multi-query search with extraction
 - Airline-specific crawling

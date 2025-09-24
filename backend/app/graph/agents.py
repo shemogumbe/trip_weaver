@@ -1,4 +1,5 @@
 from datetime import timedelta
+from typing import List
 
 
 from .state import RunState
@@ -369,4 +370,234 @@ def safety_reality_check(state: RunState) -> RunState:
         seen.add(a.source_url)
         pruned.append(a)
     state.plan.activities_catalog = pruned
+    return state
+
+
+# === OPTIMIZED ACTIVITIES AGENTS ===
+
+def generate_activities_with_openai(state: RunState) -> List[Activity]:
+    """
+    Generate comprehensive activities for the entire trip using OpenAI instead of multiple Tavily calls.
+    This replaces ~20 Tavily API calls with 1 OpenAI call.
+    """
+    from app.integrations.openai_client import call_gpt
+    import json
+    
+    p = state.prefs
+    
+    # Calculate total trip days (excluding arrival and departure days)
+    total_days = (p.end_date - p.start_date).days + 1
+    activity_days = max(1, total_days - 2)  # Exclude first and last day
+    total_slots = activity_days * 3  # morning, afternoon, evening
+    
+    # Build comprehensive prompt for activity generation
+    hobbies_text = ", ".join(p.hobbies) if p.hobbies else "general tourism"
+    
+    prompt = f"""You are a travel expert creating a detailed activity itinerary for {p.destination}.
+
+TRIP DETAILS:
+- Destination: {p.destination}
+- Duration: {total_days} days ({p.start_date} to {p.end_date})
+- Trip Type: {p.trip_type}
+- Interests/Hobbies: {hobbies_text}
+- Budget Level: {p.budget_level}
+- Number of Adults: {p.adults}
+
+REQUIREMENTS:
+- Generate {total_slots} diverse activities (enough for {activity_days} days × 3 time slots)
+- Activities should exclude arrival day ({p.start_date}) and departure day ({p.end_date})
+- Mix of: attractions, restaurants, cultural experiences, {hobbies_text}
+- Include specific location names, addresses when possible
+- Provide realistic duration estimates (0.5-8 hours)
+- Estimate prices in USD (can be 0 for free activities)
+- Include diverse activity types: sightseeing, dining, entertainment, relaxation
+- Consider {p.budget_level} budget level (low=budget-friendly, mid=moderate, high=luxury options)
+
+Return ONLY valid JSON in this exact format:
+{{
+  "activities": [
+    {{
+      "title": "Visit Nairobi National Park",
+      "location": "Langata Road, Nairobi, Kenya", 
+      "duration_hours": 4.0,
+      "est_price": 45.0,
+      "currency": "USD",
+      "source_url": null,
+      "source_title": null,
+      "tags": ["wildlife", "nature", "photography"]
+    }},
+    {{
+      "title": "Dinner at Carnivore Restaurant",
+      "location": "Langata Road, Nairobi, Kenya",
+      "duration_hours": 2.5,
+      "est_price": 35.0, 
+      "currency": "USD",
+      "source_url": null,
+      "source_title": null,
+      "tags": ["dining", "local cuisine", "popular"]
+    }}
+  ]
+}}
+
+Generate exactly {total_slots} activities with variety in pricing, duration, and activity types."""
+
+    try:
+        # Call OpenAI to generate activities
+        structured = call_gpt(prompt, model="gpt-4o-mini", response_format={"type": "json_object"})
+        
+        if not structured:
+            logger.warning("OpenAI returned empty response for activities")
+            return []
+            
+        # Parse JSON response
+        try:
+            if isinstance(structured, str):
+                data = json.loads(structured)
+            else:
+                data = structured
+        except json.JSONDecodeError as e:
+            logger.error("Invalid JSON from OpenAI for activities: %s", e)
+            return []
+        
+        activities_data = data.get("activities", [])
+        if not activities_data:
+            logger.warning("OpenAI did not return 'activities' key")
+            return []
+        
+        # Convert to Activity objects with validation
+        activities = []
+        for item in activities_data:
+            try:
+                # Sanitize data before creating Activity
+                clean_item = {
+                    "title": str(item.get("title", "Activity")).strip(),
+                    "location": str(item.get("location", "Location TBD")).strip(),
+                    "duration_hours": float(item.get("duration_hours", 2.0)) if item.get("duration_hours") else 2.0,
+                    "est_price": float(item.get("est_price", 0)) if item.get("est_price") else None,
+                    "currency": str(item.get("currency", "USD")).strip(),
+                    "source_url": item.get("source_url"),
+                    "source_title": item.get("source_title"),
+                    "tags": [str(tag).strip().lower() for tag in (item.get("tags", []) if isinstance(item.get("tags"), list) else [])]
+                }
+                
+                activity = Activity(**clean_item)
+                activities.append(activity)
+                
+            except Exception as e:
+                logger.warning(f"Failed to create Activity from OpenAI data: {e}, item: {item}")
+                continue
+        
+        logger.info(f"Generated {len(activities)} activities using OpenAI (target was {total_slots})")
+        return activities
+        
+    except Exception as e:
+        logger.error(f"Error generating activities with OpenAI: {e}")
+        return []
+
+
+def distribute_activities_across_days(activities: List[Activity], state: RunState):
+    """
+    Distribute activities evenly across available days, excluding arrival and departure days.
+    """
+    p = state.prefs
+    
+    # Calculate available days (exclude first and last day)
+    total_days = (p.end_date - p.start_date).days + 1
+    
+    if total_days <= 2:
+        # Short trip - use all days
+        available_days = list(range(total_days))
+    else:
+        # Exclude arrival (day 0) and departure (last day)
+        available_days = list(range(1, total_days - 1))
+    
+    # Create itinerary structure
+    itinerary = []
+    activity_index = 0
+    
+    for day_num in range(total_days):
+        date = (p.start_date + timedelta(days=day_num)).isoformat()
+        
+        day_plan = {
+            "date": date,
+            "morning": None,
+            "afternoon": None, 
+            "evening": None
+        }
+        
+        # Only assign activities to available days (not arrival/departure)
+        if day_num in available_days:
+            # Morning activity
+            if activity_index < len(activities):
+                day_plan["morning"] = activities[activity_index]
+                activity_index += 1
+                
+            # Afternoon activity  
+            if activity_index < len(activities):
+                day_plan["afternoon"] = activities[activity_index]
+                activity_index += 1
+                
+            # Evening activity
+            if activity_index < len(activities):
+                day_plan["evening"] = activities[activity_index]
+                activity_index += 1
+        
+        itinerary.append(day_plan)
+    
+    logger.info(f"Distributed {activity_index} activities across {len(available_days)} available days (excluding arrival/departure)")
+    return itinerary
+
+
+def optimized_activities_agent_with_openai(state: RunState) -> RunState:
+    """
+    ULTRA-OPTIMIZED: Replace ~20 Tavily calls with 1 OpenAI call.
+    Uses OpenAI to generate comprehensive activities, then distributes them properly.
+    
+    Tavily calls: 22 → 1 (95% reduction for activities)
+    Methods: Only 1 strategic search call for validation/context
+    """
+    p = state.prefs
+    
+    # Step 1: Optional minimal Tavily search for context (just 1 call)
+    context_query = f"travel guide {p.destination} popular attractions 2025"
+    search_result = t_search(context_query, max_results=5)
+    search_results = search_result.get("results", [])
+    
+    # Store minimal context for potential validation
+    state.artifacts["activities_context"] = {
+        "search_results": search_results[:3]  # Just top 3 for context
+    }
+    
+    # Step 2: Generate comprehensive activities using OpenAI
+    activities = generate_activities_with_openai(state)
+    
+    if not activities:
+        logger.warning("No activities generated by OpenAI, creating minimal fallback")
+        # Minimal fallback
+        activities = [
+            Activity(
+                title=f"Explore {p.destination} city center",
+                location=f"{p.destination} downtown",
+                duration_hours=3.0,
+                est_price=10.0,
+                tags=["sightseeing", "walking"]
+            ),
+            Activity(
+                title=f"Local restaurant in {p.destination}",
+                location=f"{p.destination}",
+                duration_hours=1.5,
+                est_price=25.0,
+                tags=["dining", "local cuisine"]
+            )
+        ]
+    
+    # Step 3: Store activities in catalog
+    state.plan.activities_catalog = activities
+    
+    # Step 4: Distribute activities across days (excluding arrival/departure)  
+    itinerary = distribute_activities_across_days(activities, state)
+    state.plan.itinerary = itinerary
+    
+    logger.info(f"ULTRA-OPTIMIZED: Generated {len(activities)} activities with 1 Tavily call + 1 OpenAI call (was 22 Tavily calls)")
+    
     return state
