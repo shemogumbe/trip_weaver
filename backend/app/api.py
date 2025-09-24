@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from app.models.trip_preferences import TravelerPrefs
 from app.graph.state import RunState
 from app.graph.build_graph import build_graph
+from app.graph.async_processor import build_graph as build_async_graph
 from app.main import format_plan
 import logging
 
@@ -28,8 +29,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize the graph
+# Initialize graphs (sync and async)
 graph = build_graph()
+async_graph = build_async_graph()
 
 class TripRequest(BaseModel):
     origin: str
@@ -65,7 +67,7 @@ def health():
     return {"status": "healthy", "service": "TripWeaver Backend"}
 
 @app.post("/plan-trip", response_model=TripResponse)
-def plan_trip(request: TripRequest):
+def plan_trip(request: TripRequest, use_async: bool = False):
     """
     Generate a comprehensive trip plan based on traveler preferences.
     
@@ -86,11 +88,11 @@ def plan_trip(request: TripRequest):
             end_date = date.fromisoformat(request.end_date)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=f"Invalid date format: {e}")
-        
+
         # Validate date range
         if start_date >= end_date:
             raise HTTPException(status_code=400, detail="End date must be after start date")
-        
+
         # Create preferences object
         prefs = TravelerPrefs(
             origin=request.origin,
@@ -103,28 +105,34 @@ def plan_trip(request: TripRequest):
             trip_type=request.trip_type,
             constraints=request.constraints
         )
-        
-        logger.info(f"Generating trip plan: {prefs.origin} -> {prefs.destination} ({prefs.start_date} to {prefs.end_date})")
-        
-        # Run the trip planning graph
+
+        logger.info(
+            f"Generating trip plan: {prefs.origin} -> {prefs.destination} ({prefs.start_date} to {prefs.end_date})"
+        )
+
+        # Run the trip planning graph (optionally using async parallel processor)
         state = RunState(prefs=prefs)
-        result = graph.invoke(state)
-        
+        result = async_graph.invoke(state) if use_async else graph.invoke(state)
+
         # Format the response
         plan = result["plan"]
         formatted_plan = format_plan(plan)
-        
+
         response = TripResponse(
             plan=formatted_plan,
             logs=result.get("logs", []),
             success=True,
             message=f"Trip plan generated for {prefs.origin} to {prefs.destination}"
         )
-        
-        logger.info(f"Trip plan generated successfully with {len(formatted_plan.get('flights', []))} flights, {len(formatted_plan.get('stays', []))} stays, and {len(formatted_plan.get('activities', []))} activity days")
-        
+
+        logger.info(
+            f"Trip plan generated successfully with {len(formatted_plan.get('flights', []))} flights, "
+            f"{len(formatted_plan.get('stays', []))} stays, and "
+            f"{len(formatted_plan.get('activities', []))} activity days"
+        )
+
         return response
-        
+
     except HTTPException:
         raise
     except Exception as e:
