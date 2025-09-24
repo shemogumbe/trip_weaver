@@ -1,4 +1,4 @@
-from app.graph.utils import  normalize_price, extract_times
+from app.graph.utils.general_utils import  normalize_price, extract_times
 from app.models.entities import FlightOption
 
 def process_flights(results, prefs):

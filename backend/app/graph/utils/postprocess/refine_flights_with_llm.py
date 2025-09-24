@@ -1,15 +1,9 @@
 import json
 import logging
-from typing import List
-from app.integrations.openai_client import call_gpt
-from app.models.entities import FlightOption
-from app.graph.utils import pick
-import json
-import logging
 from typing import List, Optional
 from app.integrations.openai_client import call_gpt
 from app.models.entities import FlightOption
-from app.graph.utils import pick, extract_currency, validate_price_reasonableness
+from app.graph.utils.general_utils import pick, extract_currency, validate_price_reasonableness, to_str
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -94,30 +88,6 @@ Raw input:
         if state:
             state.logs.append({"stage": "Flights", "raw_count": len(raw_results), "refined_count": 0, "error": "missing or invalid flights key"})
         return []
-
-    def to_str(val: Optional[object]) -> Optional[str]:
-        if val is None:
-            return None
-        if isinstance(val, str):
-            return val
-        if isinstance(val, (int, float, bool)):
-            return str(val)
-        if isinstance(val, dict):
-            # prefer common textual keys
-            for k in ("text", "title", "name", "summary", "url"):
-                v = val.get(k)
-                if isinstance(v, str):
-                    return v
-            # fallback to json string so pydantic receives a string
-            try:
-                return json.dumps(val)
-            except Exception:
-                return None
-        # fallback
-        try:
-            return str(val)
-        except Exception:
-            return None
 
     def sanitize_flight_dict(raw: dict) -> dict:
         # pick only expected keys

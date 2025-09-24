@@ -1,5 +1,5 @@
 import re
-from app.graph.utils import normalize_price
+from app.graph.utils.general_utils import normalize_price
 from app.models.entities import Activity
 
 def process_activities(results, prefs, query):
