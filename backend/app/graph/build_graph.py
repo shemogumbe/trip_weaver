@@ -1,6 +1,6 @@
 from langgraph.graph import StateGraph, END
 from app.graph.state import RunState
-from app.graph.agents import destination_research, flight_agent, stay_agent, budget_agent, itinerary_synthesizer, optimized_activities_agent_with_openai
+from app.graph.agents import destination_research, flight_agent, stay_agent, budget_agent, itinerary_synthesizer, activities_agent
 
 def build_graph():
     g = StateGraph(RunState)
@@ -8,7 +8,7 @@ def build_graph():
     g.add_node("destination_research", destination_research)
     g.add_node("flight_agent", flight_agent)
     g.add_node("stay_agent", stay_agent)
-    g.add_node("activities_agent", optimized_activities_agent_with_openai)  # Uses OpenAI instead of 22 Tavily calls
+    g.add_node("activities_agent", activities_agent)  # Google Places + LLM approach for diverse activities
     g.add_node("budget_agent", budget_agent)
     g.add_node("itinerary_synthesizer", itinerary_synthesizer)
 
