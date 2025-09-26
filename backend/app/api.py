@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import date
 from typing import List, Optional
@@ -6,8 +7,17 @@ from pydantic import BaseModel
 from app.models.trip_preferences import TravelerPrefs
 from app.graph.state import RunState
 from app.graph.build_graph import build_graph
+from app.graph.agents import (
+    destination_research,
+    flight_agent,
+    stay_agent,
+    activities_agent,
+    budget_agent,
+    itinerary_synthesizer,
+)
 from app.main import format_plan
 import logging
+import json
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -28,8 +38,93 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize the graph
+# Initialize the graph (lazy initialization for streaming reuse)
 graph = build_graph()
+
+def _format_sse(data: dict) -> str:
+    """Format a dict as an SSE event line"""
+    import json
+    return f"data: {json.dumps(data, default=str)}\n\n"
+
+async def _plan_trip_stream(state: RunState):
+    """Generator that streams progress events while the plan is being built.
+    Runs the agent pipeline step-by-step to flush updates incrementally.
+    """
+    import asyncio
+    yield _format_sse({"stage": "start", "message": "Planning started"})
+
+    last_len = 0
+
+    # Phase 1: Destination research
+    try:
+        await asyncio.to_thread(destination_research, state)
+    except Exception as e:
+        yield _format_sse({"stage": "error", "message": f"Destination research failed: {e}"})
+    last_len = len(state.logs)
+    for log in state.logs:
+        yield _format_sse({"stage": log.get("stage", "progress"), **log})
+
+    # Phase 2: Flights
+    try:
+        await asyncio.to_thread(flight_agent, state)
+    except Exception as e:
+        yield _format_sse({"stage": "error", "message": f"Flights failed: {e}"})
+    last_len = len(state.logs)
+    for log in state.logs[last_len-2 if last_len>=2 else 0:last_len]:
+        yield _format_sse({"stage": log.get("stage", "progress"), **log})
+
+    # Phase 3: Stays
+    try:
+        await asyncio.to_thread(stay_agent, state)
+    except Exception as e:
+        yield _format_sse({"stage": "error", "message": f"Stays failed: {e}"})
+    new_len = len(state.logs)
+    for log in state.logs[last_len:new_len]:
+        yield _format_sse({"stage": log.get("stage", "progress"), **log})
+    last_len = new_len
+
+    # Phase 4: Activities
+    try:
+        await asyncio.to_thread(activities_agent, state)
+    except Exception as e:
+        yield _format_sse({"stage": "error", "message": f"Activities failed: {e}"})
+    new_len = len(state.logs)
+    for log in state.logs[last_len:new_len]:
+        yield _format_sse({"stage": log.get("stage", "progress"), **log})
+    last_len = new_len
+
+    # Phase 5: Budget
+    try:
+        await asyncio.to_thread(budget_agent, state)
+    except Exception as e:
+        yield _format_sse({"stage": "error", "message": f"Budgeting failed: {e}"})
+    new_len = len(state.logs)
+    for log in state.logs[last_len:new_len]:
+        yield _format_sse({"stage": log.get("stage", "progress"), **log})
+    last_len = new_len
+
+    # Phase 6: Itinerary synthesis
+    try:
+        await asyncio.to_thread(itinerary_synthesizer, state)
+    except Exception as e:
+        yield _format_sse({"stage": "error", "message": f"Itinerary synthesis failed: {e}"})
+    new_len = len(state.logs)
+    for log in state.logs[last_len:new_len]:
+        yield _format_sse({"stage": log.get("stage", "progress"), **log})
+
+    # Final payload
+    try:
+        final_payload = {
+            "plan": format_plan(state.plan),
+            "logs": state.logs,
+            "success": True,
+            "message": "Trip plan generated successfully",
+        }
+    except Exception as e:
+        final_payload = {"plan": {}, "logs": state.logs, "success": False, "message": str(e)}
+
+    yield _format_sse({"stage": "complete", "message": "Planning complete"})
+    yield _format_sse({"stage": "result", "result": final_payload})
 
 class TripRequest(BaseModel):
     origin: str
@@ -130,6 +225,118 @@ def plan_trip(request: TripRequest):
     except Exception as e:
         logger.error(f"Error generating trip plan: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.post("/plan-trip/stream")
+async def plan_trip_stream(request: TripRequest):
+    """
+    Streaming (SSE) endpoint: emits incremental progress events while planning.
+    Events include stages like Flights Found, Flights Refined, Stays Found, Activities Found, etc.
+    """
+    from datetime import date
+    try:
+        start_date = date.fromisoformat(request.start_date)
+        end_date = date.fromisoformat(request.end_date)
+        if start_date >= end_date:
+            raise HTTPException(status_code=400, detail="End date must be after start date")
+
+        prefs = TravelerPrefs(
+            origin=request.origin,
+            destination=request.destination,
+            start_date=start_date,
+            end_date=end_date,
+            adults=request.adults,
+            budget_level=request.budget_level,
+            hobbies=request.hobbies,
+            trip_type=request.trip_type,
+            constraints=request.constraints,
+        )
+        state = RunState(prefs=prefs)
+
+        return StreamingResponse(
+            _plan_trip_stream(state),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error starting streaming plan: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/plan-trip/stream")
+async def plan_trip_stream_get(
+    origin: str,
+    destination: str,
+    start_date: str,
+    end_date: str,
+    adults: int = 2,
+    budget_level: str = "mid",
+    trip_type: str = "custom",
+    hobbies: Optional[str] = None,
+    constraints: Optional[str] = None,
+):
+    """
+    GET variant for SSE streaming to support EventSource (which only uses GET).
+    Complex fields (hobbies, constraints) are accepted as JSON strings in query params.
+    """
+    try:
+        sd = date.fromisoformat(start_date)
+        ed = date.fromisoformat(end_date)
+        if sd >= ed:
+            raise HTTPException(status_code=400, detail="End date must be after start date")
+
+        # Parse optional JSON fields
+        parsed_hobbies: List[str] = []
+        if hobbies:
+            try:
+                parsed = json.loads(hobbies)
+                if isinstance(parsed, list):
+                    parsed_hobbies = [str(x) for x in parsed]
+                else:
+                    parsed_hobbies = []
+            except Exception:
+                # fallback: comma-separated
+                parsed_hobbies = [h.strip() for h in hobbies.split(',') if h.strip()]
+
+        parsed_constraints: dict = {}
+        if constraints:
+            try:
+                parsed = json.loads(constraints)
+                parsed_constraints = parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                parsed_constraints = {}
+
+        prefs = TravelerPrefs(
+            origin=origin,
+            destination=destination,
+            start_date=sd,
+            end_date=ed,
+            adults=adults,
+            budget_level=budget_level,
+            hobbies=parsed_hobbies,
+            trip_type=trip_type,
+            constraints=parsed_constraints,
+        )
+        state = RunState(prefs=prefs)
+        return StreamingResponse(
+            _plan_trip_stream(state),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error starting streaming plan (GET): {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # Legacy endpoint for backward compatibility
 @app.post("/plan")
