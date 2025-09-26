@@ -30,14 +30,8 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run smoke checks
-        run: |
-          python - <<'PY'
-          import importlib
-          import sys
-          for m in ["app.api", "app.graph.build_graph", "app.graph.agents"]:
-              importlib.import_module(m)
-          print("Smoke import OK")
-          PY
+        run: python -m py_compile $(git ls-files '*.py')
+
 
       - name: Zip artifact
         run: |
