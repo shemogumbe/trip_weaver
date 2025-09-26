@@ -215,7 +215,7 @@ def stay_agent(state: RunState) -> RunState:
 
 
 def _fetch_places(hobby: str, destination: str) -> List[Dict]:
-    """Fetch places for a hobby/destination via Google Places (deterministic layer)."""
+    """Fetch places for a hobby and destination using Google Places."""
     if google_places_client is None:
         raise IntegrationError("Google Places API key not configured.")
     return google_places_client.search_places_by_hobby(hobby, destination)
@@ -226,7 +226,7 @@ def _fetch_places(hobby: str, destination: str) -> List[Dict]:
 
 
 def _format_activity_response(activities: List[Activity]) -> List[Activity]:
-    """Final formatting hook; ensures valid list of Activity models."""
+    """Ensure a clean list of Activity items."""
     valid: List[Activity] = []
     for a in activities:
         try:
@@ -240,14 +240,12 @@ def _format_activity_response(activities: List[Activity]) -> List[Activity]:
 
 
 def _load_cached_activities(destination: str, hobbies: List[str]) -> Optional[List[Activity]]:
-    """Cache hook placeholder: load cached activities if available.
-    Replace with Redis/DB implementation (keyed by destination+hobbies).
-    """
+    """Placeholder: load cached activities if available (replace with real cache)."""
     return None
 
 
 def _save_cached_activities(destination: str, hobbies: List[str], activities: List[Activity]) -> None:
-    """Cache hook placeholder: save generated activities for reuse."""
+    """Placeholder: save activities to a cache (replace with real cache)."""
     return None
 
 
@@ -489,14 +487,8 @@ def distribute_activities_across_days(activities: List[Activity], state: RunStat
 
 def activities_agent(state: RunState) -> RunState:
     """
-    Google Places + LLM Activities Agent
-    
-    3-step strategy:
-    1. Google Places API for real venues (when configured)
-    2. LLM expansion to create multiple activities per venue
-    3. Fallback to LLM-only with seeded venue knowledge
-    
-    Replaces the old Tavily-heavy approach with much better activity diversity.
+    Activities agent that combines Google Places results with a generation step
+    and falls back to a seeded generator when needed.
     """
     p = state.prefs
     
@@ -505,7 +497,7 @@ def activities_agent(state: RunState) -> RunState:
     available_days = max(1, total_days - 2)
     total_hobbies = len(p.hobbies)
     
-    logger.info(f"Google Places + LLM approach: targeting activities for {total_hobbies} hobbies across {available_days} days")
+    logger.info(f"Places + generator approach: targeting activities for {total_hobbies} hobbies across {available_days} days")
     
     all_activities = []
     
@@ -517,16 +509,16 @@ def activities_agent(state: RunState) -> RunState:
     }
     
     # Generate activities for each hobby
-    # Multi-tier fallback order: Places → Cache → LLM
-    # 1) Try Google Places per hobby; if Places fails (integration issue), attempt cache; else fallback to LLM
+    # Multi-tier fallback order: Places → Cache → Generator
+    # 1) Try Google Places per hobby; if Places fails (integration issue), attempt cache; else use fallback generator
     for hobby in p.hobbies:
         logger.info(f"Generating activities for hobby: {hobby}")
         places_activities: List[Activity] = []
         try:
             places = _fetch_places(hobby, p.destination)
             if places and len(places) >= 2:
-                places_activities = _expand_places_with_llm(places, hobby, p.destination, p.budget_level, price_ranges)
-                logger.info(f"Generated {len(places_activities)} activities from Google Places + LLM expansion for {hobby}")
+                places_activities = _expand_places_with_generator(places, hobby, p.destination, p.budget_level, price_ranges)
+                logger.info(f"Generated {len(places_activities)} activities from Places expansion for {hobby}")
             else:
                 logger.info(f"Limited places found for {hobby}")
         except IntegrationError as e:
@@ -538,10 +530,10 @@ def activities_agent(state: RunState) -> RunState:
         except Exception as e:
             logger.warning(f"Google Places search failed for {hobby}: {e}")
 
-        # Fallback: LLM-only if we still need activities
+        # Fallback: generator-only if we still need activities
         if len(places_activities) < 4:
-            fallback_activities = _generate_llm_fallback_activities(hobby, p.destination, p.budget_level, price_ranges)
-            logger.info(f"Generated {len(fallback_activities)} activities from LLM fallback for {hobby}")
+            fallback_activities = _generate_fallback_activities(hobby, p.destination, p.budget_level, price_ranges)
+            logger.info(f"Generated {len(fallback_activities)} activities from fallback generator for {hobby}")
             places_activities.extend(fallback_activities)
         
         # Take up to 6 activities per hobby
@@ -591,8 +583,8 @@ def activities_agent(state: RunState) -> RunState:
     return state
 
 
-def _expand_places_with_llm(places: List[Dict], hobby: str, destination: str, budget_level: str, price_ranges: Dict) -> List[Activity]:
-    """Expand real Google Places venues into multiple activities using LLM"""
+def _expand_places_with_generator(places: List[Dict], hobby: str, destination: str, budget_level: str, price_ranges: Dict) -> List[Activity]:
+    """Expand real venues into multiple activities using the generator step."""
     
     # Create venue context for LLM
     venue_context = []
@@ -640,7 +632,7 @@ Return JSON array of activities:
                     duration_hours=float(item.get("duration_hours", 2.5)),
                     est_price=float(item.get("est_price", 0)) if item.get("est_price") else None,
                     currency=str(item.get("currency", "USD")).strip(),
-                    tags=[hobby.lower(), "google_places", "llm_expansion"]
+                    tags=[hobby.lower(), "places", "generated"]
                 )
                 activities.append(activity)
             except Exception as e:
@@ -654,8 +646,8 @@ Return JSON array of activities:
         return []
 
 
-def _generate_llm_fallback_activities(hobby: str, destination: str, budget_level: str, price_ranges: Dict) -> List[Activity]:
-    """Generate activities using LLM with seeded venue knowledge"""
+def _generate_fallback_activities(hobby: str, destination: str, budget_level: str, price_ranges: Dict) -> List[Activity]:
+    """Generate activities using a seeded fallback when Places data is limited."""
     
     # Get price range for this hobby category
     category = _categorize_hobby(hobby)
@@ -697,7 +689,7 @@ Return JSON array:
                     duration_hours=float(item.get("duration_hours", 2.5)),
                     est_price=float(item.get("est_price", 0)) if item.get("est_price") else None,
                     currency=str(item.get("currency", "USD")).strip(),
-                    tags=[hobby.lower(), "llm_fallback", "seeded"]
+                    tags=[hobby.lower(), "fallback", "seeded"]
                 )
                 activities.append(activity)
             except Exception as e:
