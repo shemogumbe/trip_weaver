@@ -252,102 +252,6 @@ def _fetch_places(hobby: str, destination: str) -> List[Dict]:
         raise IntegrationError("Google Places API key not configured.")
     return google_places_client.search_places_by_hobby(hobby, destination)
 
-<<<<<<< HEAD
-=======
-    # Enhanced activity search with multiple approaches
-    base_queries = [
-        f"things to do in {p.destination} {p.start_date}",
-        f"{p.destination} attractions activities tours",
-        f"best activities {p.destination} {p.trip_type}"
-    ]
-    
-    # Add hobby-specific queries
-    for hobby in p.hobbies:
-        base_queries.extend([
-            f"{hobby} in {p.destination} {p.start_date}",
-            f"{hobby} activities {p.destination} tours",
-            f"{p.destination} {hobby} experiences"
-        ])
-    
-    # Use enhanced search with extraction for each query
-    for query in base_queries:
-        enhanced_data = enhance_search_with_extraction(query, max_results=4)
-        all_results.extend(enhanced_data.get("combined_results", []))
-    
-    # Use map API for destination-specific activities (optional)
-    map_queries = [
-        f"top attractions in {p.destination}",
-        f"must see places {p.destination}",
-        f"popular activities {p.destination}"
-    ]
-    
-    for map_query in map_queries:
-        map_result = t_map(map_query)
-        if map_result.get("results") and not map_result.get("error"):
-            all_results.extend(map_result["results"])
-    
-    # Crawl activity booking sites for detailed information (limit to avoid API limits)
-    activity_urls = []
-    for result in all_results:
-        url = result.get("url", "")
-        # Ensure url is a string, not a dict
-        if isinstance(url, dict):
-            url = url.get("url", "") or url.get("href", "") or str(url)
-        if url and isinstance(url, str) and any(site in url.lower() for site in ["getyourguide.com", "viator.com", "tripadvisor.com", "airbnb.com/experiences"]):
-            activity_urls.append(url)
-    
-    if activity_urls:
-        # Limit to 1 URL to avoid API rate limits
-        crawl_result = t_crawl(activity_urls[:1], max_depth=1, max_breadth=3)
-        all_results.extend(crawl_result.get("results", []))
-    
-    # Remove duplicates
-    seen_urls = set()
-    unique_results = []
-    for result in all_results:
-        url = result.get("url", "")
-        # Ensure url is a string, not a dict
-        if isinstance(url, dict):
-            url = url.get("url", "") or url.get("href", "") or str(url)
-        if url and isinstance(url, str) and url not in seen_urls:
-            seen_urls.add(url)
-            unique_results.append(result)
-    
-    logger.info(f"Activities agent collected {len(unique_results)} unique results")
-    state.logs.append({
-        "stage": "Activities Found",
-        "message": f"Found {len(unique_results)} raw activity results",
-        "count": len(unique_results)
-    })
->>>>>>> 0d79b3c (stream responses for user engagement)
-
-# (See complete implementations of _expand_places_with_llm and
-#  _generate_llm_fallback_activities further below.)
-
-
-<<<<<<< HEAD
-def _format_activity_response(activities: List[Activity]) -> List[Activity]:
-    """Ensure a clean list of Activity items."""
-    valid: List[Activity] = []
-    for a in activities:
-        try:
-            if isinstance(a, Activity):
-                valid.append(a)
-            else:
-                valid.append(Activity(**a))
-        except Exception:
-            continue
-    return valid
-=======
-    # store refined activities into the plan's catalog
-    state.plan.activities_catalog = refined
-    state.logs.append({
-        "stage": "Activities Refined",
-        "message": f"Refined to {len(state.plan.activities_catalog)} activities",
-        "count": len(state.plan.activities_catalog)
-    })
->>>>>>> 0d79b3c (stream responses for user engagement)
-
 
 def _load_cached_activities(destination: str, hobbies: List[str]) -> Optional[List[Activity]]:
     """Placeholder: load cached activities if available (replace with real cache)."""
@@ -358,10 +262,6 @@ def _save_cached_activities(destination: str, hobbies: List[str], activities: Li
     """Placeholder: save activities to a cache (replace with real cache)."""
     return None
 
-<<<<<<< HEAD
-
-# Removed older Tavily-heavy activities_agent in favor of Google Places + LLM implementation below.
-=======
     # Step 3: save
     state.plan.itinerary = itinerary
     state.logs.append({
@@ -370,7 +270,6 @@ def _save_cached_activities(destination: str, hobbies: List[str], activities: Li
         "days": days
     })
     return state
->>>>>>> 0d79b3c (stream responses for user engagement)
 
 
 def budget_agent(state: RunState) -> RunState:
@@ -448,6 +347,16 @@ def safety_reality_check(state: RunState) -> RunState:
 
 
 # === OPTIMIZED ACTIVITIES AGENTS ===
+
+def _format_activity_response(activities: List[Activity]) -> List[Activity]:
+    """Ensure a clean list of Activity items."""
+    out: List[Activity] = []
+    for a in activities:
+        try:
+            out.append(a if isinstance(a, Activity) else Activity(**a))
+        except Exception:
+            continue
+    return out
 
 def generate_activities_with_openai(state: RunState) -> List[Activity]:
     """
@@ -677,10 +586,7 @@ def activities_agent(state: RunState) -> RunState:
         hobby_activities = places_activities[:6]
         all_activities.extend(hobby_activities)
         logger.info(f"Generated {len(hobby_activities)} activities for {hobby}")
-<<<<<<< HEAD
-=======
         # Progress log per hobby
->>>>>>> 0d79b3c (stream responses for user engagement)
         state.logs.append({
             "stage": "Activities Generated",
             "message": f"Generated {len(hobby_activities)} activities for '{hobby}'",

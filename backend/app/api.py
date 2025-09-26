@@ -69,9 +69,10 @@ async def _plan_trip_stream(state: RunState):
         await asyncio.to_thread(flight_agent, state)
     except Exception as e:
         yield _format_sse({"stage": "error", "message": f"Flights failed: {e}"})
-    last_len = len(state.logs)
-    for log in state.logs[last_len-2 if last_len>=2 else 0:last_len]:
+    new_len = len(state.logs)
+    for log in state.logs[last_len:new_len]:
         yield _format_sse({"stage": log.get("stage", "progress"), **log})
+    last_len = new_len
 
     # Phase 3: Stays
     try:
