@@ -246,7 +246,7 @@ export const TripResults: React.FC<TripResultsProps> = ({ plan }) => {
       )}
 
       {/* Processing Logs */}
-      {state.logs.length > 0 && (
+      {/* {state.logs.length > 0 && (
         <div className="bg-gray-50 rounded-xl p-6">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Processing Summary</h3>
           <div className="space-y-2">
@@ -261,7 +261,7 @@ export const TripResults: React.FC<TripResultsProps> = ({ plan }) => {
             ))}
           </div>
         </div>
-      )}
+      )} */}
     </div>
   );
 };

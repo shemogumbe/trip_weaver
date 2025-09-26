@@ -36,18 +36,24 @@ const AppContent: React.FC = () => {
               Our AI is researching flights, hotels, and activities for your perfect trip...
             </p>
             <div className="mt-6 space-y-2">
-              <div className="flex items-center justify-center gap-2 text-sm text-gray-500">
-                <div className="w-2 h-2 bg-blue-600 rounded-full animate-pulse" />
-                <span>Searching for flights</span>
-              </div>
-              <div className="flex items-center justify-center gap-2 text-sm text-gray-500">
-                <div className="w-2 h-2 bg-green-600 rounded-full animate-pulse" />
-                <span>Finding accommodations</span>
-              </div>
-              <div className="flex items-center justify-center gap-2 text-sm text-gray-500">
-                <div className="w-2 h-2 bg-purple-600 rounded-full animate-pulse" />
-                <span>Planning activities</span>
-              </div>
+              {/* Live streaming progress from backend */}
+              {[...state.logs.slice(-6)].map((log, idx) => (
+                <div key={idx} className="flex items-center justify-center gap-2 text-sm text-gray-500">
+                  <div className={`w-2 h-2 rounded-full ${
+                    log.stage?.includes('flight') ? 'bg-blue-600' :
+                    log.stage?.includes('stay') ? 'bg-green-600' :
+                    log.stage?.includes('activit') ? 'bg-purple-600' :
+                    'bg-gray-400'
+                  } animate-pulse`} />
+                  <span>{log.message || log.stage || 'Working...'}</span>
+                </div>
+              ))}
+              {state.logs.length === 0 && (
+                <div className="flex items-center justify-center gap-2 text-sm text-gray-500">
+                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-pulse" />
+                  <span>Initializing planner…</span>
+                </div>
+              )}
             </div>
           </div>
         )}

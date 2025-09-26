@@ -59,6 +59,7 @@ export interface ProcessingLog {
   raw_count: number;
   refined_count: number;
   error?: string;
+  message?: string;
 }
 
 export interface TripResponse {

@@ -89,6 +89,16 @@ def destination_research(state: RunState) -> RunState:
             }
     
     logger.info(f"Destination research collected {len(all_sources)} sources for {destination}")
+    state.logs.append({
+        "stage": "Destination Research",
+        "message": f"Collected {len(all_sources)} sources",
+        "destination": destination,
+        "counts": {
+            "search": len(all_search_results),
+            "map": len(all_map_results),
+            "crawl": len(crawl_results)
+        }
+    })
     return state
 
 def flight_agent(state: RunState) -> RunState:
@@ -136,6 +146,11 @@ def flight_agent(state: RunState) -> RunState:
             unique_results.append(result)
     
     logger.info(f"Flight agent collected {len(unique_results)} unique results")
+    state.logs.append({
+        "stage": "Flights Found",
+        "message": f"Found {len(unique_results)} raw flight results",
+        "count": len(unique_results)
+    })
 
     refined = refine_flights_with_llm(unique_results, state=state)
     print(f"Refined flights: {refined}")
@@ -145,6 +160,12 @@ def flight_agent(state: RunState) -> RunState:
         state.plan.flights = candidates
     else:
         state.plan.flights = refined
+
+    state.logs.append({
+        "stage": "Flights Refined",
+        "message": f"Selected {len(state.plan.flights)} flight options",
+        "count": len(state.plan.flights)
+    })
 
     return state
     
@@ -200,6 +221,11 @@ def stay_agent(state: RunState) -> RunState:
             unique_results.append(result)
     
     logger.info(f"Stay agent collected {len(unique_results)} unique results")
+    state.logs.append({
+        "stage": "Stays Found",
+        "message": f"Found {len(unique_results)} raw stay results",
+        "count": len(unique_results)
+    })
 
     refined = refine_stays_with_llm(unique_results, state=state)
     print(f"Refined stays: {refined}")
@@ -209,6 +235,12 @@ def stay_agent(state: RunState) -> RunState:
         state.plan.stays = candidates
     else:
         state.plan.stays = refined
+
+    state.logs.append({
+        "stage": "Stays Refined",
+        "message": f"Selected {len(state.plan.stays)} stay options",
+        "count": len(state.plan.stays)
+    })
 
     return state
 
@@ -221,24 +253,6 @@ def _fetch_places(hobby: str, destination: str) -> List[Dict]:
     return google_places_client.search_places_by_hobby(hobby, destination)
 
 
-# (See complete implementations of _expand_places_with_llm and
-#  _generate_llm_fallback_activities further below.)
-
-
-def _format_activity_response(activities: List[Activity]) -> List[Activity]:
-    """Ensure a clean list of Activity items."""
-    valid: List[Activity] = []
-    for a in activities:
-        try:
-            if isinstance(a, Activity):
-                valid.append(a)
-            else:
-                valid.append(Activity(**a))
-        except Exception:
-            continue
-    return valid
-
-
 def _load_cached_activities(destination: str, hobbies: List[str]) -> Optional[List[Activity]]:
     """Placeholder: load cached activities if available (replace with real cache)."""
     return None
@@ -248,8 +262,14 @@ def _save_cached_activities(destination: str, hobbies: List[str], activities: Li
     """Placeholder: save activities to a cache (replace with real cache)."""
     return None
 
-
-# Removed older Tavily-heavy activities_agent in favor of Google Places + LLM implementation below.
+    # Step 3: save
+    state.plan.itinerary = itinerary
+    state.logs.append({
+        "stage": "Itinerary Drafted",
+        "message": f"Drafted itinerary for {days} days",
+        "days": days
+    })
+    return state
 
 
 def budget_agent(state: RunState) -> RunState:
@@ -264,6 +284,11 @@ def budget_agent(state: RunState) -> RunState:
 
     activities_mid = sum(prices) / max(1, len(prices))
     state.plan.activities_budget = activities_mid
+    state.logs.append({
+        "stage": "Budget Estimated",
+        "message": f"Estimated activities budget ${activities_mid:.2f}",
+        "activities_considered": len(activities)
+    })
 
     return state
 
@@ -295,6 +320,12 @@ def itinerary_synthesizer(state: RunState) -> RunState:
         )
         itinerary.append(dp)
     state.plan.itinerary = itinerary
+    state.logs.append({
+        "stage": "Itinerary Synthesized",
+        "message": f"Finalized itinerary across {len(days)} days",
+        "days": len(days),
+        "activities_used": sum(len(v) for k, v in plans[0].items() if isinstance(v, list)) if plans else 0
+    })
     return state
 
 def safety_reality_check(state: RunState) -> RunState:
@@ -307,10 +338,25 @@ def safety_reality_check(state: RunState) -> RunState:
         seen.add(a.source_url)
         pruned.append(a)
     state.plan.activities_catalog = pruned
+    state.logs.append({
+        "stage": "Safety Check",
+        "message": f"Pruned duplicate/invalid activities: kept {len(pruned)}",
+        "count": len(pruned)
+    })
     return state
 
 
 # === OPTIMIZED ACTIVITIES AGENTS ===
+
+def _format_activity_response(activities: List[Activity]) -> List[Activity]:
+    """Ensure a clean list of Activity items."""
+    out: List[Activity] = []
+    for a in activities:
+        try:
+            out.append(a if isinstance(a, Activity) else Activity(**a))
+        except Exception:
+            continue
+    return out
 
 def generate_activities_with_openai(state: RunState) -> List[Activity]:
     """
@@ -540,6 +586,7 @@ def activities_agent(state: RunState) -> RunState:
         hobby_activities = places_activities[:6]
         all_activities.extend(hobby_activities)
         logger.info(f"Generated {len(hobby_activities)} activities for {hobby}")
+        # Progress log per hobby
         state.logs.append({
             "stage": "Activities Generated",
             "message": f"Generated {len(hobby_activities)} activities for '{hobby}'",
@@ -555,6 +602,13 @@ def activities_agent(state: RunState) -> RunState:
             unique_activities.append(activity)
             seen_titles.add(activity.title)
     
+    # Summary before dedup
+    state.logs.append({
+        "stage": "Activities Generated",
+        "message": f"Generated {len(all_activities)} activities before deduplication",
+        "count": len(all_activities)
+    })
+
     logger.info(f"Final activity count: {len(unique_activities)} (after deduplication from {len(all_activities)})")
     state.logs.append({
         "stage": "Activities Deduplicated",
