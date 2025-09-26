@@ -2,6 +2,7 @@ import React, { createContext, useContext, useReducer, ReactNode } from 'react';
 import { AppState, TripRequest, TripResponse } from '../types';
 import { tripReducer } from '../reducers/tripReducer';
 import { TripAction } from '../reducers/tripReducer';
+import { apiUrl } from '../utils/api';
 
 interface TripContextType {
   state: AppState;
@@ -49,7 +50,7 @@ export const TripProvider: React.FC<TripProviderProps> = ({ children }) => {
 
         // Note: We expose a GET-like SSE endpoint for simplicity; backend expects POST body
         // If backend strictly requires POST body, we would need fetch + ReadableStream; here we adapt
-        const es = new EventSource(`/plan-trip/stream?${params.toString()}`);
+  const es = new EventSource(apiUrl(`/plan-trip/stream?${params.toString()}`));
 
         await new Promise<void>((resolve, reject) => {
           es.onmessage = (event) => {
@@ -75,7 +76,7 @@ export const TripProvider: React.FC<TripProviderProps> = ({ children }) => {
           };
         });
       } else {
-        const response = await fetch('/plan-trip', {
+        const response = await fetch(apiUrl('/plan-trip'), {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

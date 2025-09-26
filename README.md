@@ -112,54 +112,28 @@ If you prefer containers:
 
 ---
 
-## Frontend
+## Frontend (React + CRA) — streaming hookup
 
-The frontend consumes SSE events to show real‑time planning progress and renders the final plan when ready.
+The frontend connects to the backend’s streaming endpoint (SSE) and renders progressive updates and the final result.
 
-Key points:
-- Connects to `GET /plan-trip/stream` using `EventSource`
-- Handles stages like `Flights Found`, `Stays Refined`, `Activities Generated`, etc.
-- Renders flights, stays, and a day‑by‑day itinerary once `result` arrives.
+### Configure API base
+We use a CRA‑style environment variable in the frontend:
+- `frontend/.env.development`
+  - `REACT_APP_API_BASE=http://tripweaver-env.eba-ersmezej.us-east-1.elasticbeanstalk.com`
+- `frontend/.env.production`
+  - `REACT_APP_API_BASE=http://tripweaver-env.eba-ersmezej.us-east-1.elasticbeanstalk.com`
 
-Typical local run (adapt if package manager differs):
+The code reads this via `src/utils/api.ts`, which builds absolute URLs for fetch/EventSource.
+
+### Local run
 1) From `frontend/`:
-   - `npm install` (or `pnpm install`, or `yarn`)
-   - `npm run dev` (or equivalent) to start the dev server
-2) Configure the backend base URL if the frontend expects a specific env var (often in `.env` or a config file)
+   - `npm install`
+   - `npm start`
+2) The app will call the deployed EB backend by default (from the `.env.*` above).
+   - To use a local backend instead, set `REACT_APP_API_BASE=http://127.0.0.1:8000` in `.env.development` and restart `npm start`.
 
-SSE usage snippet (in React/TS):
-```ts
-useEffect(() => {
-  const params = new URLSearchParams({
-    origin, destination, start_date, end_date,
-    hobbies: JSON.stringify(hobbies),
-  });
-  const es = new EventSource(`${API_BASE}/plan-trip/stream?${params.toString()}`);
-
-  es.onmessage = (ev) => {
-    const data = JSON.parse(ev.data);
-    switch (data.stage) {
-      case 'start':
-      case 'Destination Research':
-      case 'Flights Found':
-      case 'Stays Found':
-      case 'Activities Generated':
-      case 'Budget Estimated':
-      case 'Itinerary Synthesized':
-        // append to progress log
-        break;
-      case 'result':
-        // render data.result.plan
-        break;
-      case 'complete':
-      default:
-        break;
-    }
-  };
-  es.onerror = () => es.close();
-  return () => es.close();
-}, [origin, destination, start_date, end_date, hobbies]);
-```
+### SSE is used by default
+`src/context/TripContext.tsx` opens an `EventSource(apiUrl('/plan-trip/stream?...'))` and dispatches progress stages (`Destination Research`, `Flights Found`, `Stays Refined`, `Activities Generated`, etc.). When the `result` stage arrives, the final plan is rendered.
 
 ---
 
@@ -222,10 +196,13 @@ This section outlines a pragmatic way to share the MVP quickly with real users.
 - Health check path: `/health`.
 - Build artifact: zip the `backend/` folder with a minimal Procfile if desired (uvicorn via run_server.py works for dev; for prod, consider a Gunicorn + Uvicorn worker).
 
-Optional Procfile example:
+Elastic Beanstalk Procfile:
 ```
-web: python run_server.py
+web: sh -c "uvicorn app.api:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers"
 ```
+Ensure the Procfile is at the ZIP root of the backend bundle. Our GitHub Action zips only the contents of `backend/`, so the Procfile is at the correct root in the artifact.
+
+If EB Events say “generated a Procfile”, it didn’t find yours; redeploy the correct artifact.
 
 ### 2) MongoDB Atlas setup
 
@@ -237,13 +214,11 @@ web: python run_server.py
 
 ### 3) CI/CD with GitHub Actions
 
-- Create a workflow that:
-  - Installs backend deps
-  - Runs basic checks (lint/tests if present)
-  - Packages the backend and deploys to EB (use AWS credentials stored as GitHub secrets)
-
-High‑level steps:
-- On push to main: build → test → deploy EB application version → update environment.
+This repo includes `.github/workflows/deploy-backend-eb.yml` which:
+- Checks out code and sets working directory to `backend/`
+- Installs Python deps and runs a smoke compile
+- Zips only the backend contents to `backend.zip` (Procfile at ZIP root)
+- Deploys the artifact to Elastic Beanstalk using environment/app/region secrets
 
 ### 4) Frontend ↔ Backend ↔ MongoDB Atlas connectivity
 
@@ -259,6 +234,11 @@ High‑level steps:
 
 ### 6) Minimal smoke tests (manual)
 
-- Health: `GET /health` returns `{ status: "healthy" }`.
-- Streaming: Start a plan and see progressive stages; final `result` emitted.
-- Latency: run `python backend/measure_latency.py` locally to get baseline.
+- Health: `GET /health` returns `{ "status": "healthy" }`.
+- Streaming: `GET /plan-trip/stream?...` shows stages and emits a final `result`.
+- POST: `POST /plan-trip` may require increasing the Load Balancer idle timeout in EB (180–300s) if requests take long; prefer streaming in the UI.
+
+### 7) Common deployment gotchas
+- EB Events “generated a Procfile”: your bundle didn’t include a root‑level Procfile; fix ZIP shape.
+- 504 on long `POST /plan-trip`: increase ALB idle timeout and/or rely on SSE endpoint for the UI.
+- Activities show “fallback/seeded” tags: set `GOOGLE_PLACES_API_KEY` in EB to enable venue‑based activities.
