@@ -1,11 +1,25 @@
-uvicorn[standard]
+# Core web server
 fastapi
+uvicorn[standard]
+gunicorn
+
+# Data & validation
 pydantic
+
+# Graph orchestration
 langgraph
+
+# HTTP clients
 requests
+aiohttp
+
+# Environment management
 python-dotenv
+
+# External APIs
 tavily-python
 openai
 googlemaps
-aiohttp
+
+# Database
 pymongo
