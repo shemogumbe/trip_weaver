@@ -205,3 +205,60 @@ For benchmarking, use `backend/measure_latency.py` to time the end‑to‑end fl
 
 ## License
 TBD
+
+---
+
+## Deploying the MVP (AWS + MongoDB Atlas)
+
+This section outlines a pragmatic way to share the MVP quickly with real users.
+
+### 1) Backend on AWS Elastic Beanstalk
+
+- Create an Elastic Beanstalk Python application (Web Server environment).
+- Configure environment variables in EB (Configuration → Software):
+  - `OPENAI_API_KEY`, `TAVILY_API_KEY`, `GOOGLE_PLACES_API_KEY`
+  - `MONGODB_URI` (from MongoDB Atlas), `MONGODB_DB` (e.g. `tripweaver`)
+- Scale settings: enable multi‑instance (min 2) if you expect traffic; use a load balanced environment.
+- Health check path: `/health`.
+- Build artifact: zip the `backend/` folder with a minimal Procfile if desired (uvicorn via run_server.py works for dev; for prod, consider a Gunicorn + Uvicorn worker).
+
+Optional Procfile example:
+```
+web: python run_server.py
+```
+
+### 2) MongoDB Atlas setup
+
+- Create a free/shared cluster.
+- Create a database user and network access rule for your EB environment (or 0.0.0.0/0 for quick MVP only; tighten later).
+- Get the connection string and store it in EB as `MONGODB_URI`.
+- Our backend logs requests/results best‑effort via `app/integrations/mongo_client.py`.
+  - No Mongo installed? Logging no‑ops safely.
+
+### 3) CI/CD with GitHub Actions
+
+- Create a workflow that:
+  - Installs backend deps
+  - Runs basic checks (lint/tests if present)
+  - Packages the backend and deploys to EB (use AWS credentials stored as GitHub secrets)
+
+High‑level steps:
+- On push to main: build → test → deploy EB application version → update environment.
+
+### 4) Frontend ↔ Backend ↔ MongoDB Atlas connectivity
+
+- Frontend makes SSE GET calls to `https://<your-eb-domain>/plan-trip/stream?...`.
+- CORS: Ensure EB environment sets appropriate CORS headers (we allow `*` for MVP in `api.py`).
+- Backend connects to Mongo Atlas using `MONGODB_URI`.
+
+### 5) Testing checklists
+
+- Correctness: verify that the final `result` event includes non‑empty plan structures for a typical query (e.g., NBO → Dubai).
+- Error handling: upstream key missing → Activities/Places gracefully falls back; API responds with error events; server stays healthy.
+- Data logging: after a plan run, confirm a document exists in `trip_requests` with status and summary fields.
+
+### 6) Minimal smoke tests (manual)
+
+- Health: `GET /health` returns `{ status: "healthy" }`.
+- Streaming: Start a plan and see progressive stages; final `result` emitted.
+- Latency: run `python backend/measure_latency.py` locally to get baseline.
