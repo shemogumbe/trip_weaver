@@ -14,6 +14,7 @@ from app.integrations.tavily_client import t_search, t_extract, t_map, enhance_s
 from app.graph.utils.postprocess.refine_stays_with_llm import refine_stays_with_llm
 from app.graph.utils.postprocess.refine_activities_with_llm import refine_activities_with_llm
 from app.integrations.google_places_client import google_places_client
+from app.integrations.exceptions import IntegrationError, UpstreamAPIError
 from app.integrations.openai_client import call_gpt
 import json
 
@@ -213,108 +214,42 @@ def stay_agent(state: RunState) -> RunState:
 
 
 
-def activities_agent(state: RunState) -> RunState:
-    p = state.prefs
-    all_results = []
+def _fetch_places(hobby: str, destination: str) -> List[Dict]:
+    """Fetch places for a hobby and destination using Google Places."""
+    if google_places_client is None:
+        raise IntegrationError("Google Places API key not configured.")
+    return google_places_client.search_places_by_hobby(hobby, destination)
 
-    # Enhanced activity search with multiple approaches
-    base_queries = [
-        f"things to do in {p.destination} {p.start_date}",
-        f"{p.destination} attractions activities tours",
-        f"best activities {p.destination} {p.trip_type}"
-    ]
-    
-    # Add hobby-specific queries
-    for hobby in p.hobbies:
-        base_queries.extend([
-            f"{hobby} in {p.destination} {p.start_date}",
-            f"{hobby} activities {p.destination} tours",
-            f"{p.destination} {hobby} experiences"
-        ])
-    
-    # Use enhanced search with extraction for each query
-    for query in base_queries:
-        enhanced_data = enhance_search_with_extraction(query, max_results=4)
-        all_results.extend(enhanced_data.get("combined_results", []))
-    
-    # Use map API for destination-specific activities (optional)
-    map_queries = [
-        f"top attractions in {p.destination}",
-        f"must see places {p.destination}",
-        f"popular activities {p.destination}"
-    ]
-    
-    for map_query in map_queries:
-        map_result = t_map(map_query)
-        if map_result.get("results") and not map_result.get("error"):
-            all_results.extend(map_result["results"])
-    
-    # Crawl activity booking sites for detailed information (limit to avoid API limits)
-    activity_urls = []
-    for result in all_results:
-        url = result.get("url", "")
-        # Ensure url is a string, not a dict
-        if isinstance(url, dict):
-            url = url.get("url", "") or url.get("href", "") or str(url)
-        if url and isinstance(url, str) and any(site in url.lower() for site in ["getyourguide.com", "viator.com", "tripadvisor.com", "airbnb.com/experiences"]):
-            activity_urls.append(url)
-    
-    if activity_urls:
-        # Limit to 1 URL to avoid API rate limits
-        crawl_result = t_crawl(activity_urls[:1], max_depth=1, max_breadth=3)
-        all_results.extend(crawl_result.get("results", []))
-    
-    # Remove duplicates
-    seen_urls = set()
-    unique_results = []
-    for result in all_results:
-        url = result.get("url", "")
-        # Ensure url is a string, not a dict
-        if isinstance(url, dict):
-            url = url.get("url", "") or url.get("href", "") or str(url)
-        if url and isinstance(url, str) and url not in seen_urls:
-            seen_urls.add(url)
-            unique_results.append(result)
-    
-    logger.info(f"Activities agent collected {len(unique_results)} unique results")
 
-    # Step 1: refine into Activity objects using LLM
-    refined = refine_activities_with_llm(unique_results, state=state)
-    print(f"Refined activities: {refined}")
+# (See complete implementations of _expand_places_with_llm and
+#  _generate_llm_fallback_activities further below.)
 
-    if not refined:
-        # Fallback: use existing parser for each hobby
-        all_candidates = []
-        for hobby in p.hobbies:
-            q = f"{hobby} in {p.destination} price schedule {p.start_date}"
-            candidates = process_activities(unique_results, p, q)
-            all_candidates.extend(candidates)
-        refined = all_candidates
 
-    # store refined activities into the plan's catalog
-    state.plan.activities_catalog = refined
+def _format_activity_response(activities: List[Activity]) -> List[Activity]:
+    """Ensure a clean list of Activity items."""
+    valid: List[Activity] = []
+    for a in activities:
+        try:
+            if isinstance(a, Activity):
+                valid.append(a)
+            else:
+                valid.append(Activity(**a))
+        except Exception:
+            continue
+    return valid
 
-    # Step 2: schedule into daily buckets
-    days = (p.end_date - p.start_date).days + 1
-    itinerary = []
-    i = 0
 
-    for d in range(days):
-        date = (p.start_date + timedelta(days=d)).isoformat()
-        day_plan = {"date": date, "morning": None, "afternoon": None, "evening": None}
+def _load_cached_activities(destination: str, hobbies: List[str]) -> Optional[List[Activity]]:
+    """Placeholder: load cached activities if available (replace with real cache)."""
+    return None
 
-        if i < len(refined): 
-            day_plan["morning"] = refined[i]; i += 1
-        if i < len(refined): 
-            day_plan["afternoon"] = refined[i]; i += 1
-        if i < len(refined): 
-            day_plan["evening"] = refined[i]; i += 1
 
-        itinerary.append(day_plan)
+def _save_cached_activities(destination: str, hobbies: List[str], activities: List[Activity]) -> None:
+    """Placeholder: save activities to a cache (replace with real cache)."""
+    return None
 
-    # Step 3: save
-    state.plan.itinerary = itinerary
-    return state
+
+# Removed older Tavily-heavy activities_agent in favor of Google Places + LLM implementation below.
 
 
 def budget_agent(state: RunState) -> RunState:
@@ -552,14 +487,8 @@ def distribute_activities_across_days(activities: List[Activity], state: RunStat
 
 def activities_agent(state: RunState) -> RunState:
     """
-    Google Places + LLM Activities Agent
-    
-    3-step strategy:
-    1. Google Places API for real venues (when configured)
-    2. LLM expansion to create multiple activities per venue
-    3. Fallback to LLM-only with seeded venue knowledge
-    
-    Replaces the old Tavily-heavy approach with much better activity diversity.
+    Activities agent that combines Google Places results with a generation step
+    and falls back to a seeded generator when needed.
     """
     p = state.prefs
     
@@ -568,7 +497,7 @@ def activities_agent(state: RunState) -> RunState:
     available_days = max(1, total_days - 2)
     total_hobbies = len(p.hobbies)
     
-    logger.info(f"Google Places + LLM approach: targeting activities for {total_hobbies} hobbies across {available_days} days")
+    logger.info(f"Places + generator approach: targeting activities for {total_hobbies} hobbies across {available_days} days")
     
     all_activities = []
     
@@ -580,33 +509,43 @@ def activities_agent(state: RunState) -> RunState:
     }
     
     # Generate activities for each hobby
+    # Multi-tier fallback order: Places → Cache → Generator
+    # 1) Try Google Places per hobby; if Places fails (integration issue), attempt cache; else use fallback generator
     for hobby in p.hobbies:
         logger.info(f"Generating activities for hobby: {hobby}")
-        
-        # Step 1: Try Google Places API for real venues
-        places_activities = []
+        places_activities: List[Activity] = []
         try:
-            places = google_places_client.search_places_by_hobby(hobby, p.destination)
-            
+            places = _fetch_places(hobby, p.destination)
             if places and len(places) >= 2:
-                # Step 2: LLM expansion of real places
-                places_activities = _expand_places_with_llm(places, hobby, p.destination, p.budget_level, price_ranges)
-                logger.info(f"Generated {len(places_activities)} activities from Google Places + LLM expansion for {hobby}")
+                places_activities = _expand_places_with_generator(places, hobby, p.destination, p.budget_level, price_ranges)
+                logger.info(f"Generated {len(places_activities)} activities from Places expansion for {hobby}")
             else:
-                logger.info(f"Limited places found for {hobby}, using LLM-only fallback")
+                logger.info(f"Limited places found for {hobby}")
+        except IntegrationError as e:
+            logger.warning(f"Places integration unavailable for {hobby}: {e}")
+            cached = _load_cached_activities(p.destination, [hobby])
+            if cached:
+                logger.info(f"Loaded {len(cached)} cached activities for {hobby}")
+                places_activities = cached
         except Exception as e:
             logger.warning(f"Google Places search failed for {hobby}: {e}")
-        
-        # Step 3: Fallback to LLM-only with seeded knowledge
-        if len(places_activities) < 4:  # Need more activities
-            fallback_activities = _generate_llm_fallback_activities(hobby, p.destination, p.budget_level, price_ranges)
-            logger.info(f"Generated {len(fallback_activities)} activities from LLM fallback for {hobby}")
+
+        # Fallback: generator-only if we still need activities
+        if len(places_activities) < 4:
+            fallback_activities = _generate_fallback_activities(hobby, p.destination, p.budget_level, price_ranges)
+            logger.info(f"Generated {len(fallback_activities)} activities from fallback generator for {hobby}")
             places_activities.extend(fallback_activities)
         
         # Take up to 6 activities per hobby
         hobby_activities = places_activities[:6]
         all_activities.extend(hobby_activities)
         logger.info(f"Generated {len(hobby_activities)} activities for {hobby}")
+        state.logs.append({
+            "stage": "Activities Generated",
+            "message": f"Generated {len(hobby_activities)} activities for '{hobby}'",
+            "hobby": hobby,
+            "count": len(hobby_activities)
+        })
     
     # Remove duplicates
     unique_activities = []
@@ -617,21 +556,35 @@ def activities_agent(state: RunState) -> RunState:
             seen_titles.add(activity.title)
     
     logger.info(f"Final activity count: {len(unique_activities)} (after deduplication from {len(all_activities)})")
+    state.logs.append({
+        "stage": "Activities Deduplicated",
+        "message": f"Deduplicated to {len(unique_activities)} activities",
+        "count": len(unique_activities)
+    })
     
-    # Store in catalog
-    state.plan.activities_catalog = unique_activities
+    # Store in catalog and attempt to cache for future reuse
+    state.plan.activities_catalog = _format_activity_response(unique_activities)
+    try:
+        _save_cached_activities(p.destination, p.hobbies, state.plan.activities_catalog)
+    except Exception:
+        pass
     
     # Distribute activities across days
     itinerary = distribute_activities_across_days(unique_activities, state)
     state.plan.itinerary = itinerary
+    state.logs.append({
+        "stage": "Itinerary Drafted",
+        "message": f"Drafted itinerary with {len(itinerary)} days",
+        "days": len(itinerary)
+    })
     
     logger.info(f"Google Places + LLM agent: Generated {len(unique_activities)} activities")
     
     return state
 
 
-def _expand_places_with_llm(places: List[Dict], hobby: str, destination: str, budget_level: str, price_ranges: Dict) -> List[Activity]:
-    """Expand real Google Places venues into multiple activities using LLM"""
+def _expand_places_with_generator(places: List[Dict], hobby: str, destination: str, budget_level: str, price_ranges: Dict) -> List[Activity]:
+    """Expand real venues into multiple activities using the generator step."""
     
     # Create venue context for LLM
     venue_context = []
@@ -679,7 +632,7 @@ Return JSON array of activities:
                     duration_hours=float(item.get("duration_hours", 2.5)),
                     est_price=float(item.get("est_price", 0)) if item.get("est_price") else None,
                     currency=str(item.get("currency", "USD")).strip(),
-                    tags=[hobby.lower(), "google_places", "llm_expansion"]
+                    tags=[hobby.lower(), "places", "generated"]
                 )
                 activities.append(activity)
             except Exception as e:
@@ -693,8 +646,8 @@ Return JSON array of activities:
         return []
 
 
-def _generate_llm_fallback_activities(hobby: str, destination: str, budget_level: str, price_ranges: Dict) -> List[Activity]:
-    """Generate activities using LLM with seeded venue knowledge"""
+def _generate_fallback_activities(hobby: str, destination: str, budget_level: str, price_ranges: Dict) -> List[Activity]:
+    """Generate activities using a seeded fallback when Places data is limited."""
     
     # Get price range for this hobby category
     category = _categorize_hobby(hobby)
@@ -736,7 +689,7 @@ Return JSON array:
                     duration_hours=float(item.get("duration_hours", 2.5)),
                     est_price=float(item.get("est_price", 0)) if item.get("est_price") else None,
                     currency=str(item.get("currency", "USD")).strip(),
-                    tags=[hobby.lower(), "llm_fallback", "seeded"]
+                    tags=[hobby.lower(), "fallback", "seeded"]
                 )
                 activities.append(activity)
             except Exception as e:
