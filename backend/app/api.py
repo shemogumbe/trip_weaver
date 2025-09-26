@@ -16,6 +16,7 @@ from app.graph.agents import (
     itinerary_synthesizer,
 )
 from app.main import format_plan
+from app.integrations.mongo_client import log_trip_request, update_trip_result
 import logging
 import json
 
@@ -51,7 +52,22 @@ async def _plan_trip_stream(state: RunState):
     Runs the agent pipeline step-by-step to flush updates incrementally.
     """
     import asyncio
-    yield _format_sse({"stage": "start", "message": "Planning started"})
+    # Log request start (best-effort)
+    req_id = log_trip_request({
+        "origin": state.prefs.origin,
+        "destination": state.prefs.destination,
+        "start_date": str(state.prefs.start_date),
+        "end_date": str(state.prefs.end_date),
+        "hobbies": state.prefs.hobbies,
+        "adults": state.prefs.adults,
+        "budget_level": state.prefs.budget_level,
+        "trip_type": state.prefs.trip_type,
+        "constraints": state.prefs.constraints,
+        "status": "started",
+        "mode": "stream",
+    })
+
+    yield _format_sse({"stage": "start", "message": "Planning started", "request_id": req_id})
 
     last_len = 0
 
@@ -124,8 +140,23 @@ async def _plan_trip_stream(state: RunState):
     except Exception as e:
         final_payload = {"plan": {}, "logs": state.logs, "success": False, "message": str(e)}
 
-    yield _format_sse({"stage": "complete", "message": "Planning complete"})
-    yield _format_sse({"stage": "result", "result": final_payload})
+    # Persist final result (best-effort)
+    try:
+        update_trip_result(req_id, {
+            "status": "success" if final_payload.get("success") else "error",
+            "logs_count": len(state.logs),
+            "summary": {
+                "flights": len(final_payload.get("plan", {}).get("flights", [])),
+                "stays": len(final_payload.get("plan", {}).get("stays", [])),
+                "activities": len(final_payload.get("plan", {}).get("activities", [])),
+                "itinerary_days": len(final_payload.get("plan", {}).get("itinerary", [])),
+            }
+        })
+    except Exception:
+        logger.exception("Failed to update trip result in MongoDB")
+
+    yield _format_sse({"stage": "complete", "message": "Planning complete", "request_id": req_id})
+    yield _format_sse({"stage": "result", "result": final_payload, "request_id": req_id})
 
 class TripRequest(BaseModel):
     origin: str
@@ -202,6 +233,21 @@ def plan_trip(request: TripRequest):
         
         logger.info(f"Generating trip plan: {prefs.origin} -> {prefs.destination} ({prefs.start_date} to {prefs.end_date})")
         
+        # Log request start (best-effort)
+        req_id = log_trip_request({
+            "origin": prefs.origin,
+            "destination": prefs.destination,
+            "start_date": str(prefs.start_date),
+            "end_date": str(prefs.end_date),
+            "hobbies": prefs.hobbies,
+            "adults": prefs.adults,
+            "budget_level": prefs.budget_level,
+            "trip_type": prefs.trip_type,
+            "constraints": prefs.constraints,
+            "status": "started",
+            "mode": "sync",
+        })
+
         # Run the trip planning graph
         state = RunState(prefs=prefs)
         result = graph.invoke(state)
@@ -219,12 +265,30 @@ def plan_trip(request: TripRequest):
         
         logger.info(f"Trip plan generated successfully with {len(formatted_plan.get('flights', []))} flights, {len(formatted_plan.get('stays', []))} stays, and {len(formatted_plan.get('activities', []))} activity days")
         
+        try:
+            update_trip_result(req_id, {
+                "status": "success",
+                "logs_count": len(result.get("logs", [])),
+                "summary": {
+                    "flights": len(formatted_plan.get("flights", [])),
+                    "stays": len(formatted_plan.get("stays", [])),
+                    "activities": len(formatted_plan.get("activities", [])),
+                    "itinerary_days": len(formatted_plan.get("itinerary", [])),
+                }
+            })
+        except Exception:
+            logger.exception("Failed to update trip result in MongoDB")
+
         return response
         
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error generating trip plan: {e}")
+        try:
+            update_trip_result(locals().get("req_id", None), {"status": "error", "error": str(e)})
+        except Exception:
+            logger.exception("Failed to update error in MongoDB")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 

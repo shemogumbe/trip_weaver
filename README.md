@@ -112,54 +112,28 @@ If you prefer containers:
 
 ---
 
-## Frontend
+## Frontend (React + CRA) — streaming hookup
 
-The frontend consumes SSE events to show real‑time planning progress and renders the final plan when ready.
+The frontend connects to the backend’s streaming endpoint (SSE) and renders progressive updates and the final result.
 
-Key points:
-- Connects to `GET /plan-trip/stream` using `EventSource`
-- Handles stages like `Flights Found`, `Stays Refined`, `Activities Generated`, etc.
-- Renders flights, stays, and a day‑by‑day itinerary once `result` arrives.
+### Configure API base
+We use a CRA‑style environment variable in the frontend:
+- `frontend/.env.development`
+  - `REACT_APP_API_BASE=http://tripweaver-env.eba-ersmezej.us-east-1.elasticbeanstalk.com`
+- `frontend/.env.production`
+  - `REACT_APP_API_BASE=http://tripweaver-env.eba-ersmezej.us-east-1.elasticbeanstalk.com`
 
-Typical local run (adapt if package manager differs):
+The code reads this via `src/utils/api.ts`, which builds absolute URLs for fetch/EventSource.
+
+### Local run
 1) From `frontend/`:
-   - `npm install` (or `pnpm install`, or `yarn`)
-   - `npm run dev` (or equivalent) to start the dev server
-2) Configure the backend base URL if the frontend expects a specific env var (often in `.env` or a config file)
+   - `npm install`
+   - `npm start`
+2) The app will call the deployed EB backend by default (from the `.env.*` above).
+   - To use a local backend instead, set `REACT_APP_API_BASE=http://127.0.0.1:8000` in `.env.development` and restart `npm start`.
 
-SSE usage snippet (in React/TS):
-```ts
-useEffect(() => {
-  const params = new URLSearchParams({
-    origin, destination, start_date, end_date,
-    hobbies: JSON.stringify(hobbies),
-  });
-  const es = new EventSource(`${API_BASE}/plan-trip/stream?${params.toString()}`);
-
-  es.onmessage = (ev) => {
-    const data = JSON.parse(ev.data);
-    switch (data.stage) {
-      case 'start':
-      case 'Destination Research':
-      case 'Flights Found':
-      case 'Stays Found':
-      case 'Activities Generated':
-      case 'Budget Estimated':
-      case 'Itinerary Synthesized':
-        // append to progress log
-        break;
-      case 'result':
-        // render data.result.plan
-        break;
-      case 'complete':
-      default:
-        break;
-    }
-  };
-  es.onerror = () => es.close();
-  return () => es.close();
-}, [origin, destination, start_date, end_date, hobbies]);
-```
+### SSE is used by default
+`src/context/TripContext.tsx` opens an `EventSource(apiUrl('/plan-trip/stream?...'))` and dispatches progress stages (`Destination Research`, `Flights Found`, `Stays Refined`, `Activities Generated`, etc.). When the `result` stage arrives, the final plan is rendered.
 
 ---
 
@@ -205,3 +179,66 @@ For benchmarking, use `backend/measure_latency.py` to time the end‑to‑end fl
 
 ## License
 TBD
+
+---
+
+## Deploying the MVP (AWS + MongoDB Atlas)
+
+This section outlines a pragmatic way to share the MVP quickly with real users.
+
+### 1) Backend on AWS Elastic Beanstalk
+
+- Create an Elastic Beanstalk Python application (Web Server environment).
+- Configure environment variables in EB (Configuration → Software):
+  - `OPENAI_API_KEY`, `TAVILY_API_KEY`, `GOOGLE_PLACES_API_KEY`
+  - `MONGODB_URI` (from MongoDB Atlas), `MONGODB_DB` (e.g. `tripweaver`)
+- Scale settings: enable multi‑instance (min 2) if you expect traffic; use a load balanced environment.
+- Health check path: `/health`.
+- Build artifact: zip the `backend/` folder with a minimal Procfile if desired (uvicorn via run_server.py works for dev; for prod, consider a Gunicorn + Uvicorn worker).
+
+Elastic Beanstalk Procfile:
+```
+web: sh -c "uvicorn app.api:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers"
+```
+Ensure the Procfile is at the ZIP root of the backend bundle. Our GitHub Action zips only the contents of `backend/`, so the Procfile is at the correct root in the artifact.
+
+If EB Events say “generated a Procfile”, it didn’t find yours; redeploy the correct artifact.
+
+### 2) MongoDB Atlas setup
+
+- Create a free/shared cluster.
+- Create a database user and network access rule for your EB environment (or 0.0.0.0/0 for quick MVP only; tighten later).
+- Get the connection string and store it in EB as `MONGODB_URI`.
+- Our backend logs requests/results best‑effort via `app/integrations/mongo_client.py`.
+  - No Mongo installed? Logging no‑ops safely.
+
+### 3) CI/CD with GitHub Actions
+
+This repo includes `.github/workflows/deploy-backend-eb.yml` which:
+- Checks out code and sets working directory to `backend/`
+- Installs Python deps and runs a smoke compile
+- Zips only the backend contents to `backend.zip` (Procfile at ZIP root)
+- Deploys the artifact to Elastic Beanstalk using environment/app/region secrets
+
+### 4) Frontend ↔ Backend ↔ MongoDB Atlas connectivity
+
+- Frontend makes SSE GET calls to `https://<your-eb-domain>/plan-trip/stream?...`.
+- CORS: Ensure EB environment sets appropriate CORS headers (we allow `*` for MVP in `api.py`).
+- Backend connects to Mongo Atlas using `MONGODB_URI`.
+
+### 5) Testing checklists
+
+- Correctness: verify that the final `result` event includes non‑empty plan structures for a typical query (e.g., NBO → Dubai).
+- Error handling: upstream key missing → Activities/Places gracefully falls back; API responds with error events; server stays healthy.
+- Data logging: after a plan run, confirm a document exists in `trip_requests` with status and summary fields.
+
+### 6) Minimal smoke tests (manual)
+
+- Health: `GET /health` returns `{ "status": "healthy" }`.
+- Streaming: `GET /plan-trip/stream?...` shows stages and emits a final `result`.
+- POST: `POST /plan-trip` may require increasing the Load Balancer idle timeout in EB (180–300s) if requests take long; prefer streaming in the UI.
+
+### 7) Common deployment gotchas
+- EB Events “generated a Procfile”: your bundle didn’t include a root‑level Procfile; fix ZIP shape.
+- 504 on long `POST /plan-trip`: increase ALB idle timeout and/or rely on SSE endpoint for the UI.
+- Activities show “fallback/seeded” tags: set `GOOGLE_PLACES_API_KEY` in EB to enable venue‑based activities.

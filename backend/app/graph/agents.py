@@ -14,7 +14,7 @@ from app.integrations.tavily_client import t_search, t_extract, t_map, enhance_s
 from app.graph.utils.postprocess.refine_stays_with_llm import refine_stays_with_llm
 from app.graph.utils.postprocess.refine_activities_with_llm import refine_activities_with_llm
 from app.integrations.google_places_client import google_places_client
-from app.integrations.exceptions import IntegrationError, UpstreamAPIError
+from app.integrations.exceptions import IntegrationError
 from app.integrations.openai_client import call_gpt
 import json
 
@@ -261,15 +261,6 @@ def _load_cached_activities(destination: str, hobbies: List[str]) -> Optional[Li
 def _save_cached_activities(destination: str, hobbies: List[str], activities: List[Activity]) -> None:
     """Placeholder: save activities to a cache (replace with real cache)."""
     return None
-
-    # Step 3: save
-    state.plan.itinerary = itinerary
-    state.logs.append({
-        "stage": "Itinerary Drafted",
-        "message": f"Drafted itinerary for {days} days",
-        "days": days
-    })
-    return state
 
 
 def budget_agent(state: RunState) -> RunState:
