@@ -26,6 +26,7 @@ Notes:
 - Frontend: React + TypeScript (in `frontend/`)
   - Connects to a streaming endpoint (SSE) to show live planning progress
   - Renders the final plan (flights, stays, activities, day‑by‑day itinerary)
+  - Client‑side export: download the rendered plan as PDF or JSON (no backend export routes)
 
 - Backend: FastAPI (in `backend/app/`)
   - Orchestrates a set of “agents” that each produce part of the trip
@@ -53,6 +54,7 @@ Notes:
 4) Frontend shows live updates from these events.
 5) When complete, backend emits a final `result` event with the full plan.
 6) Frontend renders flights, stays, an activities catalog, and a day‑by‑day itinerary.
+7) From the UI, the user can export the current plan as a PDF (generated from the rendered view) or download it as JSON.
 
 ---
 
@@ -145,6 +147,17 @@ The code reads this via `src/utils/api.ts`, which builds absolute URLs for fetch
 
 ### SSE is used by default
 `src/context/TripContext.tsx` opens an `EventSource(apiUrl('/plan-trip/stream?...'))` and dispatches progress stages (`Destination Research`, `Flights Found`, `Stays Refined`, `Activities Generated`, etc.). When the `result` stage arrives, the final plan is rendered.
+
+---
+
+### Export (client‑side)
+
+The frontend provides export options directly in the browser:
+
+- PDF export: Generated on the client from the rendered plan (no server route required).
+- JSON export: Downloads the current plan state as a `.json` file.
+
+Note: There are no backend endpoints for export; everything is produced client‑side from the final streamed result.
 
 ---
 
