@@ -10,6 +10,17 @@ An AI‑assisted trip planning app that researches your destination, finds fligh
 
 ---
 
+## Current deployment snapshot
+
+As currently configured, the MVP is deployed as follows:
+- Backend: AWS Elastic Beanstalk (Python + Uvicorn/FastAPI)
+- Frontend: S3 Static Website Hosting (HTTP)
+- Database: MongoDB Atlas
+
+Notes:
+- The frontend uses a CRA env var `REACT_APP_API_BASE` to call the backend. When hosting the frontend on S3 (HTTP‑only), point it to the EB HTTP URL to avoid mixed‑content.
+- For production/HTTPS, enable TLS on the EB load balancer (ACM + 443 listener) and point the frontend to the HTTPS API domain (or host the frontend on a HTTPS CDN like Amplify/CloudFront).
+
 ## Architecture overview
 
 - Frontend: React + TypeScript (in `frontend/`)
@@ -204,6 +215,12 @@ Ensure the Procfile is at the ZIP root of the backend bundle. Our GitHub Action 
 
 If EB Events say “generated a Procfile”, it didn’t find yours; redeploy the correct artifact.
 
+Tip — Going HTTPS later (recommended for production):
+- Request a free ACM certificate for `api.yourdomain.com` (us‑east‑1)
+- EB → Configuration → Load balancer: add HTTPS (443) listener and attach the cert
+- Point DNS (Route 53) `api.yourdomain.com` to the EB load balancer
+- Update the frontend `REACT_APP_API_BASE` to `https://api.yourdomain.com`
+
 ### 2) MongoDB Atlas setup
 
 - Create a free/shared cluster.
@@ -219,6 +236,46 @@ This repo includes `.github/workflows/deploy-backend-eb.yml` which:
 - Installs Python deps and runs a smoke compile
 - Zips only the backend contents to `backend.zip` (Procfile at ZIP root)
 - Deploys the artifact to Elastic Beanstalk using environment/app/region secrets
+
+### 4) Frontend on S3 Static Website Hosting (HTTP)
+
+To host the SPA over HTTP (useful for quick demos without TLS):
+
+1) Build the frontend locally
+- From `frontend/`: `npm install` then `npm run build`
+
+2) Create an S3 bucket (unique name)
+- Enable “Static website hosting”
+- Index document: `index.html`; Error document: `index.html` (SPA routing)
+
+3) Make the site publicly readable (demo‑only)
+- Apply a public bucket policy like:
+```
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "PublicReadGetObject",
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::YOUR_BUCKET_NAME/*"
+    }
+  ]
+}
+```
+
+4) Upload the frontend build
+- Upload the contents of `frontend/build/` to the bucket root
+- Open the S3 Static Website Hosting endpoint URL (HTTP)
+
+5) Point the frontend at the backend
+- Set `frontend/.env.development` and `frontend/.env.production`:
+  - `REACT_APP_API_BASE=http://<your-eb-env>.elasticbeanstalk.com` (HTTP)
+- Rebuild the frontend after changing env values (CRA reads env at build time)
+
+Important:
+- S3 static website hosting is HTTP‑only. When using it, keep the backend URL on HTTP to avoid browser mixed‑content errors. For production, enable HTTPS on EB and host the frontend on a HTTPS origin with an HTTPS API base.
 
 ### 4) Frontend ↔ Backend ↔ MongoDB Atlas connectivity
 
